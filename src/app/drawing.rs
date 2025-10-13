@@ -1,6 +1,8 @@
 use log::{debug, error, info, warn};
 use tokio::time::Duration;
-use winter_paintboard_sdk::{PaintboardClient, Rgb, Pos, config::Config};
+use winter_paintboard_sdk::{PaintboardClient, config::Config};
+
+use crate::app::image_processing::ProcessedImageData;
 
 /// Represents different progressive drawing modes
 pub enum ProgressiveMode {
@@ -22,28 +24,46 @@ impl ProgressiveMode {
 /// Draws an image to the paintboard using various modes
 pub async fn draw_image_to_paintboard(
     client: &mut PaintboardClient,
-    draw_operations: Vec<(Pos, Rgb)>,
+    processed_image_data: ProcessedImageData,
     progressive_mode: &ProgressiveMode,
     max_batch_size: usize,
     delay: u64,
     batch_mode: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let total_pixels = draw_operations.len();
-    
+    draw_image_to_paintboard_with_client(
+        client,
+        &processed_image_data,
+        progressive_mode,
+        max_batch_size,
+        delay,
+        batch_mode,
+    ).await
+}
+
+/// Draws an image to the paintboard using various modes with processed image data
+pub async fn draw_image_to_paintboard_with_client(
+    client: &mut PaintboardClient,
+    processed_image_data: &ProcessedImageData,
+    progressive_mode: &ProgressiveMode,
+    max_batch_size: usize,
+    delay: u64,
+    batch_mode: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     match progressive_mode {
         ProgressiveMode::Chessboard => {
             // 棋盘格渐进式绘制模式
             info!("使用棋盘格渐进式绘制模式...");
+            let total_pixels = processed_image_data.full_scale_operations.len();
             let mut processed_progressive = 0;
 
             // 定义步进模式 (例如: 4步棋盘格模式)
             let steps: u32 = 4; // 明确指定类型为 u32
-            let mut step_draw_operations = Vec::with_capacity(draw_operations.len() / steps as usize); // 预估容量
+            let mut step_draw_operations = Vec::with_capacity(total_pixels / steps as usize); // 预估容量
 
             for step in 0..steps {
                 step_draw_operations.clear(); // 清空上一步的数据
 
-                for (pos, color) in &draw_operations {
+                for (pos, color) in &processed_image_data.full_scale_operations {
                     // 根据像素坐标和当前步数决定是否绘制
                     // 这里使用棋盘格模式的变种：Step 0 绘制 (pos.x + pos.y) % 4 == 0 的点，
                     // Step 1 绘制 (pos.x + pos.y) % 4 == 1 的点，以此类推
@@ -96,53 +116,63 @@ pub async fn draw_image_to_paintboard(
 
             // Process each scale level
             for (scale_index, &factor) in scale_factors.iter().enumerate() {
-                if factor == 1.0 {
-                    // For the full scale, use all operations
-                    info!("开始绘制 Scale Level {}: Factor {}, {} 个像素...", scale_index, factor, draw_operations.len());
-
-                    for chunk in draw_operations.chunks(max_batch_size) {
-                        match client.paint_batch(chunk.to_vec()).await {
-                            Ok(()) => {
-                                processed_scaled += chunk.len();
-                                debug!("Scale Level {} 批次发送完成，已发送: {}/{} 像素", scale_index, processed_scaled, total_pixels);
-                                
-                                // 在批次之间添加延迟以避免速率限制
-                                tokio::time::sleep(Duration::from_millis(delay)).await;
-                            }
-                            Err(e) => {
-                                error!("Scale Level {} 批量绘制错误: {:?}", scale_index, e);
-                                // 继续处理下一个批次，而不是中断
-                            }
-                        }
-                    }
+                let level_operations = if factor == 1.0 {
+                    // For the full scale, use full scale operations
+                    &processed_image_data.full_scale_operations
                 } else {
-                    // For smaller scale factors, we need to create a downscaled version
-                    // This would require recreating the image at different scales
-                    // For now, we'll skip this complexity but note that in a full implementation,
-                    // we'd need to use the original RGBA image and scale it down
-                    info!("Scale level {} (factor {}) requires downscaling which needs original image access", scale_index, factor);
-                    // In a full implementation, we would:
-                    // 1. Scale down the original image to the target factor
-                    // 2. Generate draw operations for the scaled image
-                    // 3. Send those operations to the client
+                    // For smaller scale factors, get from pre-calculated operations
+                    // Map scale factor index (0.25 -> index 0, 0.5 -> index 1)
+                    let level_idx = if factor == 0.25 { 0 } else if factor == 0.5 { 1 } else { continue; };
+                    if level_idx >= processed_image_data.scale_level_operations.len() {
+                        continue;
+                    }
+                    &processed_image_data.scale_level_operations[level_idx]
+                };
+
+                if level_operations.is_empty() {
+                    info!("Scale level {} (factor {}) has no drawable pixels, skipping", scale_index, factor);
                     continue;
                 }
 
-                info!("Scale Level {} 绘制完成，累计发送: {}/{} 像素", scale_index, processed_scaled, total_pixels);
+                info!("开始绘制 Scale Level {}: Factor {}, {} 个像素...", scale_index, factor, level_operations.len());
+
+                for chunk in level_operations.chunks(max_batch_size) {
+                    match client.paint_batch(chunk.to_vec()).await {
+                        Ok(()) => {
+                            processed_scaled += chunk.len();
+                            debug!("Scale Level {} 批次发送完成，已发送: {}/{} 像素", scale_index, processed_scaled, level_operations.len());
+                            
+                            // 在批次之间添加延迟以避免速率限制
+                            tokio::time::sleep(Duration::from_millis(delay)).await;
+                        }
+                        Err(e) => {
+                            error!("Scale Level {} 批量绘制错误: {:?}", scale_index, e);
+                            // 继续处理下一个批次，而不是中断
+                        }
+                    }
+                }
+
+                info!("Scale Level {} 绘制完成，累计发送: {}/{} 像素", scale_index, processed_scaled, level_operations.len());
+
+                // 在每个层级之间添加延迟，以产生"逐步清晰"的视觉效果
+                if scale_index < scale_factors.len() - 1 { // 最后一层后不需要等待
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                }
             }
 
             info!("缩放渐进式绘制发送完成，总共发送了 {} 个像素（不等待响应确认）", processed_scaled);
         }
         ProgressiveMode::None => {
             // 标准批量或逐个绘制模式
-            if batch_mode && !draw_operations.is_empty() {
+            let total_pixels = processed_image_data.full_scale_operations.len();
+            if batch_mode && !processed_image_data.full_scale_operations.is_empty() {
                 // 使用批量绘制模式（粘包机制），支持分批，不等待响应
                 info!("使用批量绘制模式，最大批量大小: {}, 总共 {} 个像素...", max_batch_size, total_pixels);
                 
                 let mut processed = 0;
                 
                 // 按最大批量大小分批处理
-                for chunk in draw_operations.chunks(max_batch_size) {
+                for chunk in processed_image_data.full_scale_operations.chunks(max_batch_size) {
                     match client.paint_batch(chunk.to_vec()).await {
                         Ok(()) => {
                             processed += chunk.len();
@@ -164,8 +194,8 @@ pub async fn draw_image_to_paintboard(
                 let mut successful_draws = 0;
                 let mut failed_draws = 0;
                 
-                for (i, (pos, color)) in draw_operations.into_iter().enumerate() {
-                    match client.paint(pos, color).await {
+                for (i, (pos, color)) in processed_image_data.full_scale_operations.iter().enumerate() {
+                    match client.paint(*pos, *color).await {
                         Ok(result) => {
                             match result.status {
                                 winter_paintboard_sdk::models::PaintStatus::Success => {

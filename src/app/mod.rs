@@ -9,7 +9,7 @@ use winter_paintboard_sdk::config::Config;
 
 use crate::app::{
     cli::Cli,
-    image_processing::{read_and_resize_image, prepare_draw_operations},
+    image_processing::{process_image_at_all_scales, ProcessedImageData},
     drawing::{draw_image_to_paintboard, ProgressiveMode, create_client},
     utils::{get_token_with_access_key, validate_auth_args},
 };
@@ -37,43 +37,6 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Determine progressive mode
-    let progressive_mode = ProgressiveMode::from_string(&cli.progressive);
-
-    // Check if loop mode is enabled
-    if cli.loop_draw {
-        info!("开始循环绘制模式，时间间隔: {} 毫秒", cli.loop_interval);
-        loop {
-            if let Err(e) = draw_single_image(&cli, &token, &progressive_mode).await {
-                error!("绘制图片时发生错误: {:?}", e);
-            }
-            
-            info!("等待 {} 毫秒后再次绘制...", cli.loop_interval);
-            tokio::time::sleep(Duration::from_millis(cli.loop_interval)).await;
-        }
-    } else {
-        // Single draw mode
-        draw_single_image(&cli, &token, &progressive_mode).await?;
-    }
-    
-    Ok(())
-}
-
-/// Draws a single image to the paintboard
-async fn draw_single_image(
-    cli: &Cli,
-    token: &str,
-    progressive_mode: &ProgressiveMode,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Read and resize the image
-    let rgba_img = read_and_resize_image(&cli.image, cli.width, cli.height)?;
-    let (img_width, img_height) = rgba_img.dimensions();
-
-    // Prepare draw operations
-    info!("正在准备绘制数据...");
-    let draw_operations = prepare_draw_operations(&rgba_img, cli.x, cli.y)?;
-    info!("总共准备了 {} 个绘制操作", draw_operations.len());
-
     // Initialize paintboard client config
     info!("正在初始化绘板客户端...");
     let mut config = Config::default(); // 使用默认配置
@@ -84,16 +47,53 @@ async fn draw_single_image(
     // 设置认证信息
     client.set_auth(cli.uid, token.to_string());
 
-    // Draw the image based on the selected mode
-    draw_image_to_paintboard(
-        &mut client,
-        draw_operations,
-        progressive_mode,
-        cli.max_batch_size,
-        cli.delay,
-        cli.batch_mode,
-    ).await?;
+    // Determine progressive mode
+    let progressive_mode = ProgressiveMode::from_string(&cli.progressive);
 
-    info!("图片绘制完成！图片尺寸: {}x{}, 起始坐标: ({}, {})", img_width, img_height, cli.x, cli.y);
+    // 在 run_app 函数内部进行图像预处理，这样在循环模式下只需处理一次
+    info!("正在预处理图片数据...");
+    let processed_image_data = process_image_at_all_scales(
+        &cli.image,
+        cli.width,
+        cli.height,
+        cli.x,
+        cli.y,
+    )?;
+
+    // Check if loop mode is enabled
+    if cli.loop_draw {
+        info!("开始循环绘制模式，时间间隔: {} 毫秒", cli.loop_interval);
+        loop {
+            // 在循环内部使用已预处理的数据，避免重复预处理
+            if let Err(e) = crate::app::drawing::draw_image_to_paintboard_with_client(
+                &mut client,
+                &processed_image_data,
+                &progressive_mode,
+                cli.max_batch_size,
+                cli.delay,
+                cli.batch_mode,
+            ).await {
+                error!("绘制图片时发生错误: {:?}", e);
+            }
+            
+            info!("等待 {} 毫秒后再次绘制...", cli.loop_interval);
+            tokio::time::sleep(Duration::from_millis(cli.loop_interval)).await;
+        }
+    } else {
+        // Single draw mode - 使用已预处理的数据
+        crate::app::drawing::draw_image_to_paintboard_with_client(
+            &mut client,
+            &processed_image_data,
+            &progressive_mode,
+            cli.max_batch_size,
+            cli.delay,
+            cli.batch_mode,
+        ).await?;
+    }
+    
+    info!("图片绘制完成！图片尺寸: {}x{}, 起始坐标: ({}, {})", 
+          processed_image_data.img_width, 
+          processed_image_data.img_height, 
+          cli.x, cli.y);
     Ok(())
 }

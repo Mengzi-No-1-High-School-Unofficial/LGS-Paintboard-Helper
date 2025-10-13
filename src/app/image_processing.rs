@@ -1,6 +1,15 @@
 use image::{open, RgbaImage, imageops::FilterType};
 use log::{info, warn};
 
+/// Represents processed image data for different scale factors
+#[derive(Clone)]
+pub struct ProcessedImageData {
+    pub img_width: u32,
+    pub img_height: u32,
+    pub full_scale_operations: Vec<(winter_paintboard_sdk::Pos, winter_paintboard_sdk::Rgb)>,
+    pub scale_level_operations: Vec<Vec<(winter_paintboard_sdk::Pos, winter_paintboard_sdk::Rgb)>>,
+}
+
 /// Reads and resizes an image from the given path
 pub fn read_and_resize_image(
     image_path: &std::path::Path,
@@ -22,13 +31,62 @@ pub fn read_and_resize_image(
     Ok(img.into_rgba8())
 }
 
-/// Prepares draw operations from an RGBA image
-pub fn prepare_draw_operations(
+/// Processes an image at multiple scale factors to prepare drawing operations
+pub fn process_image_at_all_scales(
+    image_path: &std::path::Path,
+    width: Option<u32>,
+    height: Option<u32>,
+    start_x: i32,
+    start_y: i32,
+) -> Result<ProcessedImageData, Box<dyn std::error::Error>> {
+    info!("正在读取并预处理图片: {:?}", image_path);
+    let original_rgba = read_and_resize_image(image_path, width, height)?;
+    let (img_width, img_height) = original_rgba.dimensions();
+    
+    // Prepare full scale operations (1.0 factor)
+    let full_scale_operations = prepare_draw_operations_with_coords(&original_rgba, start_x, start_y)?;
+    
+    // Prepare scale level operations for scale progressive mode
+    let scale_factors = vec![0.25, 0.5];
+    let mut scale_level_operations = Vec::new();
+    
+    for &factor in &scale_factors {
+        info!("正在处理缩放级别: {} ({}x{})", factor, (img_width as f32 * factor) as u32, (img_height as f32 * factor) as u32);
+        
+        // Scale the image to the current factor
+        let level_width = (img_width as f32 * factor) as u32;
+        let level_height = (img_height as f32 * factor) as u32;
+        
+        if level_width == 0 || level_height == 0 {
+            info!("Scale factor {} results in 0 size, skipping", factor);
+            scale_level_operations.push(Vec::new());
+            continue;
+        }
+        
+        let level_img = image::imageops::resize(&original_rgba, level_width, level_height, FilterType::Triangle);
+        let level_operations = prepare_draw_operations_with_coords(&level_img, start_x, start_y)?;
+        scale_level_operations.push(level_operations);
+    }
+    
+    info!("图片预处理完成！原图尺寸: {}x{}", img_width, img_height);
+    
+    Ok(ProcessedImageData {
+        img_width,
+        img_height,
+        full_scale_operations,
+        scale_level_operations,
+    })
+}
+
+/// Prepares draw operations from an RGBA image with coordinates mapping
+fn prepare_draw_operations_with_coords(
     rgba_img: &RgbaImage,
     start_x: i32,
     start_y: i32,
 ) -> Result<Vec<(winter_paintboard_sdk::Pos, winter_paintboard_sdk::Rgb)>, Box<dyn std::error::Error>> {
     let mut draw_operations = Vec::new();
+    let (_img_width, _img_height) = rgba_img.dimensions();  // Use underscore prefix for unused variables
+    
     for (x, y, pixel) in rgba_img.enumerate_pixels() {
         // 获取像素的RGBA值
         let [r, g, b, a] = pixel.0;
