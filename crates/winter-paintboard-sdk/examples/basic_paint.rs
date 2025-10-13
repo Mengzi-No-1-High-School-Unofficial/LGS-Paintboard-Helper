@@ -20,23 +20,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "your_access_key_here".to_string()); // Use placeholder value
     
     // Get a token using your UID and access key
-    println!("Getting token...");
+    log::debug!("Getting token...");
     let token = client.get_token(uid, &access_key).await?;
-    println!("Got token: {}", token);
+    log::debug!("Got token: {}", token);
     
     // Define a position and color to paint
     let pos = Pos::new(100, 50)?;
     let color = Rgb::new(255, 0, 0); // Red color
     
-    println!("Painting at position ({}, {}) with RGB({}, {}, {})...", 
+    log::debug!("Painting at position ({}, {}) with RGB({}, {}, {})...", 
              pos.x, pos.y, color.r, color.g, color.b);
     
     // Perform the painting operation
     // Note: This would require a real token and proper authentication in a real scenario
     // let result = client.paint(pos, color).await?;
-    // println!("Paint result: {:?}", result);
+    // log::debug!("Paint result: {:?}", result);
     
-    println!("Paint operation completed!");
+    log::debug!("Paint operation completed!");
     
     Ok(())
 }

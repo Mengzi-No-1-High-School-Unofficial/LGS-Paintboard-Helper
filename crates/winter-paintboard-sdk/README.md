@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let color = Rgb::new(255, 0, 0); // Red
     
     let result = client.paint(pos, color).await?;
-    println!("Paint result: {:?}", result);
+    log::debug!("Paint result: {:?}", result);
     
     Ok(())
 }
@@ -63,11 +63,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Get the current board state
     let board = client.get_board().await?;
-    println!("Board size: {}x{}", board.width, board.height);
+    log::debug!("Board size: {}x{}", board.width, board.height);
     
     // Get a specific pixel
     let pixel = board.get_pixel(0, 0)?;
-    println!("Top-left pixel: RGB({}, {}, {})", pixel.r, pixel.g, pixel.b);
+    log::debug!("Top-left pixel: RGB({}, {}, {})", pixel.r, pixel.g, pixel.b);
     
     Ok(())
 }

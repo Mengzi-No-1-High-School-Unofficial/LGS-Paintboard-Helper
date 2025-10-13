@@ -75,19 +75,19 @@ impl WsClient {
 
     /// Start the background task for processing incoming WebSocket messages
     async fn start_message_processing_task(&mut self) {
-        println!("[DEBUG] 开始启动消息处理任务");
+        log::debug!("开始启动消息处理任务");
         
         // Cancel the previous task if it exists
         if let Some(handle) = self.message_task_handle.take() {
             handle.abort();
-            println!("[DEBUG] 已停止之前的消息处理任务");
+            log::debug!("已停止之前的消息处理任务");
         }
         
         let connection_clone = self.connection.clone();
         let response_channels_clone = self.response_channels.clone();
         
         self.message_task_handle = Some(tokio::spawn(async move {
-            println!("[DEBUG] 消息处理任务开始运行");
+            log::debug!("消息处理任务开始运行");
             // Create a loop to continuously process messages
             let mut last_heartbeat_time = std::time::Instant::now();
             loop {
