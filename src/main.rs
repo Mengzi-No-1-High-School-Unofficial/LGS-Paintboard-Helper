@@ -63,9 +63,9 @@ struct Cli {
     #[arg(long, default_value_t = 60000)]
     loop_interval: u64,
 
-    /// 启用渐进式绘制模式 (可选，默认为禁用)
-    #[arg(long, default_value_t = false)]
-    progressive: bool,
+    /// 渐进式绘制模式 (可选，'none', 'chessboard', 'scale')
+    #[arg(long, default_value = "none")]
+    progressive: String,
 }
 
 #[tokio::main]
@@ -90,9 +90,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             img = img.resize_exact(target_width, target_height, image::imageops::Triangle);
         }
 
-        let rgba_img: RgbaImage = img.into_rgba8();
-        let (img_width, img_height) = rgba_img.dimensions();
-
         // 3. 初始化绘板客户端配置
         info!("正在初始化绘板客户端...");
         let mut config = Config::default(); // 使用默认配置
@@ -105,8 +102,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 4. 将图片像素数据转换为绘板绘制请求
         info!("正在准备绘制数据...");
+        // 为缩放模式预先准备好全尺寸的RGBA图像
+        let full_rgba_img: RgbaImage = if cli.progressive == "scale" {
+             let full_size_img = img.resize_exact(target_width, target_height, image::imageops::Triangle);
+             full_size_img.into_rgba8()
+        } else {
+            // 非缩放模式，只转换一次
+            img.resize_exact(target_width, target_height, image::imageops::Triangle).into_rgba8()
+        };
+        let (img_width, img_height) = full_rgba_img.dimensions();
+
         let mut draw_operations = Vec::new();
-        for (x, y, pixel) in rgba_img.enumerate_pixels() {
+        for (x, y, pixel) in full_rgba_img.enumerate_pixels() {
             // 获取像素的RGBA值
             let [r, g, b, a] = pixel.0;
             
@@ -138,9 +145,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("正在绘制图片到画板...");
         let total_pixels = draw_operations.len();
         
-        if cli.progressive {
-            // 渐进式绘制模式
-            info!("使用渐进式绘制模式...");
+        if cli.progressive == "chessboard" {
+            // 棋盘格渐进式绘制模式
+            info!("使用棋盘格渐进式绘制模式...");
             let mut processed_progressive = 0;
 
             // 定义步进模式 (例如: 4步棋盘格模式)
@@ -193,7 +200,89 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            info!("渐进式绘制发送完成，总共发送了 {} 个像素（不等待响应确认）", processed_progressive);
+            info!("棋盘格渐进式绘制发送完成，总共发送了 {} 个像素（不等待响应确认）", processed_progressive);
+        } else if cli.progressive == "scale" {
+            // 缩放渐进式绘制模式
+            info!("使用缩放渐进式绘制模式...");
+            let mut processed_scaled = 0;
+
+            // 定义缩放层级 (例如: 1/4, 1/2, 1 (全尺寸))
+            let scale_factors = vec![0.25, 0.5, 1.0];
+            // 重新缩放原始图片到目标尺寸
+            let full_size_img = img.resize_exact(target_width, target_height, image::imageops::Triangle);
+            let full_rgba_img: RgbaImage = full_size_img.into_rgba8();
+
+            for (scale_index, &factor) in scale_factors.iter().enumerate() {
+                let level_width = (target_width as f32 * factor) as u32;
+                let level_height = (target_height as f32 * factor) as u32;
+
+                if level_width == 0 || level_height == 0 {
+                    info!("Scale factor {} results in 0 size, skipping", factor);
+                    continue;
+                }
+
+                let level_img = image::imageops::resize(&full_rgba_img, level_width, level_height, image::imageops::Triangle);
+                let mut level_draw_operations = Vec::new();
+
+                for (x, y, pixel) in level_img.enumerate_pixels() {
+                    let [r, g, b, a] = pixel.0;
+                    
+                    if a == 0 {
+                        continue;
+                    }
+
+                    // 计算在画板上的实际坐标 (映射回全尺寸)
+                    // 将缩放图坐标 (x, y) 映射回原图坐标 (board_x, board_y)
+                    // 使用中心对齐映射
+                    let board_x = (cli.x as u32).saturating_add(
+                        (x as f32 * (1.0 / factor)).round() as u32
+                    );
+                    let board_y = (cli.y as u32).saturating_add(
+                        (y as f32 * (1.0 / factor)).round() as u32
+                    );
+
+                    if board_x >= 1000 || board_y >= 600 {
+                        continue;
+                    }
+
+                    let pos = Pos::new(board_x as u16, board_y as u16)?;
+                    let color = Rgb::new(r, g, b);
+                    level_draw_operations.push((pos, color));
+                }
+
+                if level_draw_operations.is_empty() {
+                    info!("Scale level {} (factor {}) has no drawable pixels, skipping", scale_index, factor);
+                    continue;
+                }
+
+                info!("开始绘制 Scale Level {}: Factor {}, {} 个像素...", scale_index, factor, level_draw_operations.len());
+
+                // 对当前层级的像素进行批量发送
+                for chunk in level_draw_operations.chunks(cli.max_batch_size) {
+                    match client.paint_batch(chunk.to_vec()).await {
+                        Ok(()) => {
+                            processed_scaled += chunk.len();
+                            debug!("Scale Level {} 批次发送完成，已发送: {}/{} 像素", scale_index, processed_scaled, total_pixels);
+                            
+                            // 在批次之间添加延迟以避免速率限制
+                            tokio::time::sleep(tokio::time::Duration::from_millis(cli.delay)).await;
+                        }
+                        Err(e) => {
+                            error!("Scale Level {} 批量绘制错误: {:?}", scale_index, e);
+                            // 继续处理下一个批次，而不是中断
+                        }
+                    }
+                }
+
+                info!("Scale Level {} 绘制完成，累计发送: {}/{} 像素", scale_index, processed_scaled, total_pixels);
+
+                // 在每个层级之间添加延迟，以产生“逐步清晰”的视觉效果
+                if scale_index < scale_factors.len() - 1 { // 最后一层后不需要等待
+                    tokio::time::sleep(tokio::time::Duration::from_millis(cli.delay)).await;
+                }
+            }
+
+            info!("缩放渐进式绘制发送完成，总共发送了 {} 个像素（不等待响应确认）", processed_scaled);
         } else if cli.batch_mode && !draw_operations.is_empty() {
             // 使用批量绘制模式（粘包机制），支持分批，不等待响应
             info!("使用批量绘制模式，最大批量大小: {}, 总共 {} 个像素...", cli.max_batch_size, total_pixels);
