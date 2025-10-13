@@ -10,23 +10,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a new client
     let client = PaintboardClient::new(config).await?;
     
-    println!("Getting the current board...");
+    log::debug!("Getting the current board...");
     
     // Get the current board state
     let board = client.get_board().await?;
     
-    println!("Successfully retrieved board:");
-    println!("  Dimensions: {}x{}", board.width, board.height);
-    println!("  Data size: {} bytes", board.data.len());
+    log::debug!("Successfully retrieved board:");
+    log::debug!("  Dimensions: {}x{}", board.width, board.height);
+    log::debug!("  Data size: {} bytes", board.data.len());
     
     // Get a specific pixel (example: top-left corner)
     if let Ok(pixel) = board.get_pixel(0, 0) {
-        println!("  Top-left pixel RGB: ({}, {}, {})", pixel.r, pixel.g, pixel.b);
+        log::debug!("  Top-left pixel RGB: ({}, {}, {})", pixel.r, pixel.g, pixel.b);
     }
     
     // Get another pixel (example: center)
     if let Ok(pixel) = board.get_pixel(500, 300) {
-        println!("  Center pixel RGB: ({}, {}, {})", pixel.r, pixel.g, pixel.b);
+        log::debug!("  Center pixel RGB: ({}, {}, {})", pixel.r, pixel.g, pixel.b);
     }
     
     Ok(())

@@ -20,18 +20,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let color = Rgb::new((50 * i as u16) as u8, (100 * i as u16) as u8, (150 * i as u16) as u8);
         
         batch_client.add_paint(pos, color)?;
-        println!("Added paint operation at ({}, {}) with color RGB({}, {}, {})", 
+        log::debug!("Added paint operation at ({}, {}) with color RGB({}, {}, {})", 
                  pos.x, pos.y, color.r, color.g, color.b);
     }
     
-    println!("Executing batch of {} operations...", batch_client.pending_count());
+    log::debug!("Executing batch of {} operations...", batch_client.pending_count());
     
     // Execute the batch
     let results = batch_client.execute_batch().await?;
     
-    println!("Batch execution completed. Results: {} results", results.len());
+    log::debug!("Batch execution completed. Results: {} results", results.len());
     for (i, result) in results.iter().enumerate() {
-        println!("  Operation {}: {:?}", i, result.status);
+        log::debug!("  Operation {}: {:?}", i, result.status);
     }
     
     Ok(())
