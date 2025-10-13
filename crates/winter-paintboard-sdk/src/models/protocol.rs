@@ -28,7 +28,7 @@ impl From<u8> for OpCode {
 pub enum ProtocolMessage {
     HeartbeatPing,
     PaintEvent { pos: Pos, color: Rgb },
-    PaintResult { status: u8 },
+    PaintResult { drawing_id: u32, status: u8 },
     HeartbeatPong,  // Add the missing variant for client-to-server heartbeat
     Unknown { opcode: u8, data: Vec<u8> },
 }
@@ -56,11 +56,19 @@ impl ProtocolMessage {
                 Ok(ProtocolMessage::PaintEvent { pos, color })
             },
             0xff => {
-                if payload.len() < 1 {
+                if payload.len() < 5 { // 4 bytes for drawing_id + 1 byte for status
                     return Err(PaintboardError::InvalidData);
                 }
                 
-                Ok(ProtocolMessage::PaintResult { status: payload[0] })
+                let drawing_id = u32::from_le_bytes([
+                    payload[0],
+                    payload[1], 
+                    payload[2],
+                    payload[3]
+                ]);
+                let status = payload[4];
+                
+                Ok(ProtocolMessage::PaintResult { drawing_id, status })
             },
             _ => Ok(ProtocolMessage::Unknown { opcode, data: payload.to_vec() }),
         }

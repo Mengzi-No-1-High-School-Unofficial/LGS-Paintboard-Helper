@@ -36,39 +36,36 @@ impl From<u8> for PaintStatus {
     }
 }
 
+use uuid::Uuid;
+
 /// A paint operation to be sent to the server
 #[derive(Debug, Clone)]
 pub struct PaintOperation {
     pub pos: Pos,
     pub color: Rgb,
-    pub token_uid: u32,  // The UID part of the token (will be split into 3 bytes)
-    pub token: String,   // The 16-byte token as string
-    pub paint_id: u32,   // Changed from u64 to u32 to match protocol
+    pub token_uid: u32,    // The UID part of the token (will be split into 3 bytes)
+    pub token: String,     // The UUID token as string
+    pub paint_id: u32,     // Changed from u64 to u32 to match protocol
 }
 
 impl PaintOperation {
     /// Convert the paint operation to binary format for WebSocket transmission
     pub fn to_binary(&self) -> Vec<u8> {
-        // First 8 bytes: opcode + position + color
         let mut data = vec![OpCode::Paint as u8]; // 0xfe
         data.extend_from_slice(&self.pos.x.to_le_bytes());  // X coordinate (uint16)
         data.extend_from_slice(&self.pos.y.to_le_bytes());  // Y coordinate (uint16)
         data.extend_from_slice(&[self.color.r, self.color.g, self.color.b]); // RGB values
         
         // Next 21 bytes: 3-byte token UID + 16-byte token + 4-byte drawing ID
-        // Split UID into 3 bytes according to protocol (as mentioned in the doc)
-        // We'll use the lower 3 bytes of the u32 UID
+        
+        // Split UID into 3 bytes according to protocol
         let uid_bytes = self.token_uid.to_le_bytes();
         data.extend_from_slice(&uid_bytes[0..3]);  // Take first 3 bytes of UID
         
-        // Add 16-byte token (assuming it's a UUID string that should be 16 bytes when parsed)
-        let mut token_bytes = self.token.as_bytes().to_vec();
-        if token_bytes.len() > 16 {
-            token_bytes.truncate(16);
-        } else if token_bytes.len() < 16 {
-            token_bytes.resize(16, 0); // Pad with zeros if needed
-        }
-        data.extend_from_slice(&token_bytes);
+        // Add 16-byte token - parse UUID string to 16-byte binary format
+        let token_uuid = Uuid::parse_str(&self.token)
+            .unwrap_or_else(|_| Uuid::nil()); // Use nil UUID if parsing fails
+        data.extend_from_slice(token_uuid.as_bytes());
         
         // Add 4-byte drawing ID
         data.extend_from_slice(&self.paint_id.to_le_bytes());

@@ -95,9 +95,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. 初始化绘板客户端配置
     println!("正在初始化绘板客户端...");
     let mut config = Config::default(); // 使用默认配置
-    if let Some(ws_url) = cli.ws_url {
-        config.ws_url = ws_url;
-    }
+    // 确保使用正确的WebSocket端点
+    config.ws_url = cli.ws_url.unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
     let mut client = PaintboardClient::new(config).await?; // 使用新的API
     
     // 设置认证信息
