@@ -38,7 +38,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             api_base_url: "https://paintboard.luogu.me".to_string(),
-            ws_url: "wss://paintboard.luogu.me".to_string(),
+            ws_url: "wss://paintboard.luogu.me/api/paintboard/ws".to_string(),
             heartbeat_interval: std::time::Duration::from_secs(30),
             max_retries: 3,
             retry_delay: std::time::Duration::from_secs(1),

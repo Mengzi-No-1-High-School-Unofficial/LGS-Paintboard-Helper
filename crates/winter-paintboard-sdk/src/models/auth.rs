@@ -16,6 +16,7 @@ pub struct TokenData {
 /// Response for getting a token
 #[derive(Debug, Deserialize)]
 pub struct TokenResponse {
-    pub statusCode: i32,
+    #[serde(rename = "statusCode")]
+    pub status_code: i32,
     pub data: TokenData,
 }

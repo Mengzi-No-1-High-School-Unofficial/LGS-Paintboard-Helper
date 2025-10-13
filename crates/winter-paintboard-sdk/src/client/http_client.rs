@@ -76,8 +76,8 @@ impl HttpClient {
             .await
             .map_err(|e| PaintboardError::JsonParse(e.to_string()))?;
 
-        if token_response.statusCode != 200 {
-            return Err(PaintboardError::Auth(format!("API returned error status {}: token data", token_response.statusCode)));
+        if token_response.status_code != 200 {
+            return Err(PaintboardError::Auth(format!("API returned error status {}: token data", token_response.status_code)));
         }
 
         Ok(token_response.data.token)
