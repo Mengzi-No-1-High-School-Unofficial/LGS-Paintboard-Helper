@@ -1,7 +1,8 @@
 use crate::{
     error::PaintboardError, 
     models::{Rgb, Pos, PaintOperation, PaintResult, PaintStatus, ProtocolMessage, OpCode},
-    config::Config
+    config::Config,
+    event::{EventBus, Event},
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -63,11 +64,20 @@ impl WsClient {
                 // Start the message processing task
                 self.start_message_processing_task().await;
                 
+                // 发送连接打开事件到事件总线
+                let event_bus = EventBus::global();
+                let _ = event_bus.send(Event::ConnectionOpened);
+                
                 debug!("连接和消息处理任务初始化完成");
                 Ok(())
             }
             Err(e) => {
                 debug!("WebSocket 连接失败: {}", e);
+                
+                // 发送错误事件到事件总线
+                let event_bus = EventBus::global();
+                let _ = event_bus.send(Event::error_event(format!("WebSocket connection failed: {}", e)));
+                
                 Err(PaintboardError::WebSocket(e.to_string()))
             }
         }
@@ -106,6 +116,10 @@ impl WsClient {
                                         match protocol_msg {
                                             ProtocolMessage::HeartbeatPing => {
                                                 trace!("收到服务器心跳 PING");
+                                                // 发送心跳事件到事件总线
+                                                let event_bus = EventBus::global();
+                                                let _ = event_bus.send(Event::HeartbeatEvent);
+                                                
                                                 // Respond to heartbeat ping
                                                 let pong_msg = vec![OpCode::HeartbeatPong as u8];
                                                 trace!("发送心跳 PONG 响应");
@@ -117,6 +131,10 @@ impl WsClient {
                                                         }
                                                         Err(e) => {
                                                             error!("心跳 PONG 发送失败: {}", e);
+                                                            
+                                                            // 发送错误事件到事件总线
+                                                            let event_bus = EventBus::global();
+                                                            let _ = event_bus.send(Event::error_event(format!("Heartbeat PONG send failed: {}", e)));
                                                         }
                                                     }
                                                 }
@@ -151,6 +169,9 @@ impl WsClient {
                                                 // Handle paint events (for read-only clients)
                                                 debug!("Received paint event at ({}, {}) with color ({}, {}, {})", 
                                                          pos.x, pos.y, color.r, color.g, color.b);
+                                                // 发送绘图事件到事件总线（表示其他用户绘制了该像素）
+                                                let event_bus = EventBus::global();
+                                                let _ = event_bus.send(Event::other_paint_event(pos, color));
                                             },
                                             ProtocolMessage::Unknown { opcode, data } => {
                                                 warn!("Received unknown message with opcode: {}, data length: {}", opcode, data.len());
@@ -161,15 +182,28 @@ impl WsClient {
                                         }
                                     } else {
                                         debug!("无法解析二进制消息: {:?}", &data[..std::cmp::min(10, data.len())]);
+                                        
+                                        // 发送错误事件到事件总线
+                                        let event_bus = EventBus::global();
+                                        let _ = event_bus.send(Event::error_event(format!("Failed to parse binary message: {:?}", &data[..std::cmp::min(10, data.len())])));
                                     }
                                 },
                                 Message::Close(close_frame) => {
                                     // Connection closed by server
                                     info!("WebSocket 连接被服务器关闭: {:?}", close_frame);
+                                    
+                                    // 发送连接关闭事件到事件总线
+                                    let event_bus = EventBus::global();
+                                    let _ = event_bus.send(Event::ConnectionClosed);
+                                    
                                     break;
                                 },
                                 Message::Text(text) => {
                                     warn!("收到意外的文本消息: {}", text);
+                                    
+                                    // 发送错误事件到事件总线
+                                    let event_bus = EventBus::global();
+                                    let _ = event_bus.send(Event::error_event(format!("Received unexpected text message: {}", text)));
                                 },
                                 Message::Ping(_) => {
                                     trace!("收到 WebSocket ping");
@@ -191,12 +225,22 @@ impl WsClient {
                         Some(Err(e)) => {
                             drop(conn_guard);
                             error!("WebSocket 错误: {}", e);
+                            
+                            // 发送错误事件到事件总线
+                            let event_bus = EventBus::global();
+                            let _ = event_bus.send(Event::error_event(format!("WebSocket error: {}", e)));
+                            
                             break;
                         },
                         None => {
                             drop(conn_guard);
                             // Connection closed
                             debug!("WebSocket 连接关闭 (None received)");
+                            
+                            // 发送连接关闭事件到事件总线
+                            let event_bus = EventBus::global();
+                            let _ = event_bus.send(Event::ConnectionClosed);
+                            
                             break;
                         }
                     }
@@ -205,6 +249,11 @@ impl WsClient {
                     // Check if connection has been inactive for too long
                     if last_heartbeat_time.elapsed() > std::time::Duration::from_secs(60) {
                         warn!("连接长时间无活动，可能已断开");
+                        
+                        // 发送连接关闭事件到事件总线
+                        let event_bus = EventBus::global();
+                        let _ = event_bus.send(Event::ConnectionClosed);
+                        
                         break;
                     }
                     // Wait a bit before trying to process again
@@ -271,15 +320,29 @@ impl WsClient {
                     match ws_stream.send(Message::Binary(binary_data)).await {
                         Ok(_) => {
                             debug!("绘图消息发送成功");
+                            
+                            // 发送绘图事件到事件总线（表示当前实例已发送请求）
+                            let event_bus = EventBus::global();
+                            let _ = event_bus.send(Event::own_paint_event(pos, color));
                         }
                         Err(e) => {
                             error!("发送绘图消息失败: {}", e);
+                            
+                            // 发送错误事件到事件总线
+                            let event_bus = EventBus::global();
+                            let _ = event_bus.send(Event::error_event(format!("Failed to send paint message: {}", e)));
+                            
                             return Err(PaintboardError::WebSocket(e.to_string()));
                         }
                     }
                 }
                 None => {
                     error!("连接不存在，发送失败");
+                    
+                    // 发送错误事件到事件总线
+                    let event_bus = EventBus::global();
+                    let _ = event_bus.send(Event::error_event("Connection not available for sending paint message".to_string()));
+                    
                     return Err(PaintboardError::ConnectionClosed);
                 }
             }
@@ -326,14 +389,14 @@ impl WsClient {
         let mut all_binary_data = Vec::new(); // For sticky packet mechanism
         
         // Create all operations and collect their binary data
-        for (pos, color) in operations {
+        for (pos, color) in &operations { // Use reference to avoid moving operations
             // Generate a unique paint ID
             let paint_id = rand::random::<u64>();
             
             // Create the paint operation - UPDATE to match the protocol format
             let operation = PaintOperation {
-                pos,
-                color,
+                pos: *pos, // Dereference the position
+                color: *color, // Dereference the color
                 token_uid: uid,
                 token: token.clone(), // Clone token for each operation
                 paint_id: paint_id as u32, // Convert to u32 to match protocol
@@ -367,15 +430,31 @@ impl WsClient {
                     match ws_stream.send(Message::Binary(all_binary_data)).await {
                         Ok(_) => {
                             debug!("批量消息发送成功");
+                            
+                            // 发送绘图事件到事件总线（为每个操作发送一个事件，表示当前实例已发送请求）
+                            let event_bus = EventBus::global();
+                            for (pos, color) in &operations {
+                                let _ = event_bus.send(Event::own_paint_event(*pos, *color));
+                            }
                         }
                         Err(e) => {
                             error!("发送批量消息失败: {}", e);
+                            
+                            // 发送错误事件到事件总线
+                            let event_bus = EventBus::global();
+                            let _ = event_bus.send(Event::error_event(format!("Failed to send batch message: {}", e)));
+                            
                             return Err(PaintboardError::WebSocket(e.to_string()));
                         }
                     }
                 }
                 None => {
                     error!("批量发送 - 连接不存在，发送失败");
+                    
+                    // 发送错误事件到事件总线
+                    let event_bus = EventBus::global();
+                    let _ = event_bus.send(Event::error_event("Connection not available for sending batch message".to_string()));
+                    
                     return Err(PaintboardError::ConnectionClosed);
                 }
             }
