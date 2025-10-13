@@ -41,4 +41,7 @@ pub enum PaintboardError {
     
     #[error("Connection closed")]
     ConnectionClosed,
+    
+    #[error("Response channel closed")]
+    ResponseChannelClosed,
 }

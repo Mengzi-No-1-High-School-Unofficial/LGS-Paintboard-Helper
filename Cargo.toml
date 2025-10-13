@@ -1,5 +1,21 @@
+[package]
+name = "lgs-paintboard"
+version = "0.1.0"
+edition = "2021"
+
 [workspace]
-resolver = "2"
 members = [
     "crates/winter-paintboard-sdk",
 ]
+
+[dependencies]
+clap = { workspace = true }
+image = { workspace = true }
+tokio = { workspace = true }
+winter-paintboard-sdk = { workspace = true }
+
+[workspace.dependencies]
+clap = { version = "4.0", features = ["derive"] }
+image = { version = "0.24", features = ["png"] }
+tokio = { version = "1.0", features = ["full"] }
+winter-paintboard-sdk = { path = "crates/winter-paintboard-sdk" }

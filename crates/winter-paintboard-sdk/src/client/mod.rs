@@ -18,6 +18,8 @@ pub struct PaintboardClient {
     http_client: HttpClient,
     ws_client: Option<WsClient>, // WebSocket client is optional and created on demand
     config: Arc<Config>,
+    uid: Option<u32>,
+    token: Option<String>,
 }
 
 impl PaintboardClient {
@@ -30,7 +32,15 @@ impl PaintboardClient {
             http_client,
             ws_client: None,
             config,
+            uid: None,
+            token: None,
         })
+    }
+
+    /// Set the authentication credentials (UID and token)
+    pub fn set_auth(&mut self, uid: u32, token: String) {
+        self.uid = Some(uid);
+        self.token = Some(token);
     }
 
     /// Get the current board data
@@ -47,14 +57,42 @@ impl PaintboardClient {
     pub async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<crate::models::PaintResult, PaintboardError> {
         // Initialize WebSocket client if not already created
         if self.ws_client.is_none() {
-            let ws_client = WsClient::new(self.config.clone()).await?;
+            let mut ws_client = WsClient::new(self.config.clone()).await?;
+            
+            // Set authentication if available
+            if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
+                ws_client.set_auth(uid, token.clone());
+            }
+            
             self.ws_client = Some(ws_client);
         }
         
         // Get a mutable reference to the WebSocket client and call paint
         if let Some(ref mut ws_client) = self.ws_client {
-            // For now, we'll return a dummy result; actual implementation will be in WsClient
             ws_client.paint(pos, color).await
+        } else {
+            // This should not happen, but added for safety
+            Err(PaintboardError::ClientNotInitialized)
+        }
+    }
+
+    /// Paint multiple pixels at once using batch operation (sticky packet, no response waiting)
+    pub async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
+        // Initialize WebSocket client if not already created
+        if self.ws_client.is_none() {
+            let mut ws_client = WsClient::new(self.config.clone()).await?;
+            
+            // Set authentication if available
+            if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
+                ws_client.set_auth(uid, token.clone());
+            }
+            
+            self.ws_client = Some(ws_client);
+        }
+        
+        // Get a mutable reference to the WebSocket client and call paint_batch
+        if let Some(ref mut ws_client) = self.ws_client {
+            ws_client.paint_batch(operations).await
         } else {
             // This should not happen, but added for safety
             Err(PaintboardError::ClientNotInitialized)
