@@ -7,8 +7,15 @@ pub struct AuthRequest {
     pub access_key: String,
 }
 
+/// Inner data structure for token response
+#[derive(Debug, Deserialize)]
+pub struct TokenData {
+    pub token: String,
+}
+
 /// Response for getting a token
 #[derive(Debug, Deserialize)]
 pub struct TokenResponse {
-    pub data: String,
+    pub statusCode: i32,
+    pub data: TokenData,
 }

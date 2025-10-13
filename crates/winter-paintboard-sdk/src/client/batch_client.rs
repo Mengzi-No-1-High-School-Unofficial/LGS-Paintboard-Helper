@@ -42,8 +42,9 @@ impl BatchClient {
         // 3. Process responses
         
         // For now, just return dummy results
-        for _ in operations {
+        for i in 0..operations.len() {
             results.push(crate::models::PaintResult {
+                drawing_id: i as u32, // Use index as drawing ID
                 status: crate::models::PaintStatus::Success,
                 message: "Batch operation successful".to_string(),
             });

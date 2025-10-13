@@ -3,7 +3,9 @@ use crate::{
     models::{Rgb, Pos, PaintOperation, PaintResult, PaintStatus, ProtocolMessage, OpCode},
     config::Config
 };
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{Mutex as TokioMutex, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures::{SinkExt, StreamExt};
 use url::Url;
@@ -11,9 +13,11 @@ use url::Url;
 /// WebSocket client for Winter Paintboard API
 pub struct WsClient {
     config: Arc<Config>,
-    connection: Arc<Mutex<Option<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>>>,
+    connection: Arc<TokioMutex<Option<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>>>,
     uid: Option<u32>,
     token: Option<String>,
+    // 用于匹配请求和响应的通道映射
+    response_channels: Arc<TokioMutex<HashMap<u64, oneshot::Sender<PaintResult>>>>,
 }
 
 impl WsClient {
@@ -21,9 +25,10 @@ impl WsClient {
     pub async fn new(config: Arc<Config>) -> Result<Self, PaintboardError> {
         Ok(Self {
             config,
-            connection: Arc::new(Mutex::new(None)),
+            connection: Arc::new(TokioMutex::new(None)),
             uid: None,
             token: None,
+            response_channels: Arc::new(TokioMutex::new(HashMap::new())),
         })
     }
 
@@ -43,7 +48,7 @@ impl WsClient {
             .map_err(|e| PaintboardError::WebSocket(e.to_string()))?;
         
         // Store the connection
-        let mut conn_guard = self.connection.lock().unwrap();
+        let mut conn_guard = self.connection.lock().await;
         *conn_guard = Some(ws_stream);
         
         Ok(())
@@ -56,25 +61,37 @@ impl WsClient {
         let token = self.token.clone().ok_or(PaintboardError::Auth("Token not set".to_string()))?;
         
         // Ensure we're connected
-        if self.connection.lock().unwrap().is_none() {
+        if self.connection.lock().await.is_none() {
             self.connect().await?;
         }
         
-        // Create the paint operation
+        // Generate a unique paint ID
+        let paint_id = rand::random::<u64>();
+        
+        // Create the paint operation - UPDATE to match the protocol format
         let operation = PaintOperation {
             pos,
             color,
-            uid,
+            token_uid: uid,
             token,
-            paint_id: Some(rand::random::<u64>()), // Generate a random paint ID
+            paint_id: paint_id as u32, // Convert to u32 to match protocol
         };
+        
+        // Create a one-shot channel to receive the response
+        let (response_tx, response_rx) = oneshot::channel();
+        
+        // Store the response channel for this paint ID
+        {
+            let mut channels = self.response_channels.lock().await;
+            channels.insert(paint_id, response_tx);
+        }
         
         // Get the binary representation
         let binary_data = operation.to_binary();
         
         // Send the message
         {
-            let mut conn_guard = self.connection.lock().unwrap();
+            let mut conn_guard = self.connection.lock().await;
             let ws_stream = conn_guard.as_mut().ok_or(PaintboardError::ConnectionClosed)?;
             
             ws_stream
@@ -83,24 +100,76 @@ impl WsClient {
                 .map_err(|e| PaintboardError::WebSocket(e.to_string()))?;
         }
         
-        // Wait for the result (in a real implementation, you'd want to wait for the specific response)
-        // For now, just return a success result
-        Ok(PaintResult {
-            status: PaintStatus::Success,
-            message: "Paint operation sent".to_string(),
-        })
+        // Wait for the response with a timeout
+        match tokio::time::timeout(std::time::Duration::from_secs(10), response_rx).await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(_)) => Err(PaintboardError::ResponseChannelClosed),
+            Err(_) => {
+                // Remove the channel if timeout occurred
+                {
+                    let mut channels = self.response_channels.lock().await;
+                    channels.remove(&paint_id);
+                }
+                Err(PaintboardError::Timeout)
+            }
+        }
+    }
+
+    /// Send multiple paint operations together using sticky packet mechanism, without waiting for responses
+    pub async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
+        if operations.is_empty() {
+            return Ok(());
+        }
+        
+        // Check if we have authentication
+        let uid = self.uid.ok_or(PaintboardError::Auth("UID not set".to_string()))?;
+        let token = self.token.clone().ok_or(PaintboardError::Auth("Token not set".to_string()))?;
+        
+        let mut all_binary_data = Vec::new(); // For sticky packet mechanism
+        
+        // Create all operations and collect their binary data
+        for (pos, color) in operations {
+            // Generate a unique paint ID
+            let paint_id = rand::random::<u64>();
+            
+            // Create the paint operation - UPDATE to match the protocol format
+            let operation = PaintOperation {
+                pos,
+                color,
+                token_uid: uid,
+                token: token.clone(), // Clone token for each operation
+                paint_id: paint_id as u32, // Convert to u32 to match protocol
+            };
+            
+            // Get the binary representation and add to the sticky packet
+            let binary_data = operation.to_binary();
+            all_binary_data.extend(binary_data); // This is the sticky packet mechanism - concatenating all binary data
+        }
+        
+        // Send all data in one sticky packet
+        {
+            let mut conn_guard = self.connection.lock().await;
+            let ws_stream = conn_guard.as_mut().ok_or(PaintboardError::ConnectionClosed)?;
+            
+            ws_stream
+                .send(Message::Binary(all_binary_data))
+                .await
+                .map_err(|e| PaintboardError::WebSocket(e.to_string()))?;
+        }
+        
+        Ok(())
     }
 
     /// Send a heartbeat (PONG) response
     pub async fn send_heartbeat_pong(&mut self) -> Result<(), PaintboardError> {
-        if self.connection.lock().unwrap().is_none() {
+        if self.connection.lock().await.is_none() {
             self.connect().await?;
         }
         
         let pong_message = vec![OpCode::HeartbeatPong as u8];
         
         {
-            let mut conn_guard = self.connection.lock().unwrap();
+            let mut conn_guard = self.connection.lock().await;
             let ws_stream = conn_guard.as_mut().ok_or(PaintboardError::ConnectionClosed)?;
             
             ws_stream
@@ -114,12 +183,12 @@ impl WsClient {
 
     /// Listen for events from the server
     pub async fn listen_for_events(&mut self) -> Result<ProtocolMessage, PaintboardError> {
-        if self.connection.lock().unwrap().is_none() {
+        if self.connection.lock().await.is_none() {
             self.connect().await?;
         }
         
         {
-            let mut conn_guard = self.connection.lock().unwrap();
+            let mut conn_guard = self.connection.lock().await;
             let ws_stream = conn_guard.as_mut().ok_or(PaintboardError::ConnectionClosed)?;
             
             // Wait for the next message
