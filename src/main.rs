@@ -62,6 +62,10 @@ struct Cli {
     /// 循环绘制的时间间隔（毫秒）(可选，默认为60000毫秒，即60秒)
     #[arg(long, default_value_t = 60000)]
     loop_interval: u64,
+
+    /// 启用渐进式绘制模式 (可选，默认为禁用)
+    #[arg(long, default_value_t = false)]
+    progressive: bool,
 }
 
 #[tokio::main]
@@ -134,7 +138,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("正在绘制图片到画板...");
         let total_pixels = draw_operations.len();
         
-        if cli.batch_mode && !draw_operations.is_empty() {
+        if cli.progressive {
+            // 渐进式绘制模式
+            info!("使用渐进式绘制模式...");
+            let mut processed_progressive = 0;
+
+            // 定义步进模式 (例如: 4步棋盘格模式)
+            let steps: u32 = 4; // 明确指定类型为 u32
+            let mut step_draw_operations = Vec::with_capacity(draw_operations.len() / steps as usize); // 预估容量
+
+            for step in 0..steps {
+                step_draw_operations.clear(); // 清空上一步的数据
+
+                for (pos, color) in &draw_operations {
+                    // 根据像素坐标和当前步数决定是否绘制
+                    // 这里使用棋盘格模式的变种：Step 0 绘制 (pos.x + pos.y) % 4 == 0 的点，
+                    // Step 1 绘制 (pos.x + pos.y) % 4 == 1 的点，以此类推
+                    if (((pos.x as u32 + pos.y as u32)) % steps) == step {
+                        step_draw_operations.push((*pos, *color));
+                    }
+                }
+
+                if step_draw_operations.is_empty() {
+                    info!("Step {} 没有需要绘制的像素，跳过", step);
+                    continue;
+                }
+
+                info!("开始绘制 Step {}: {} 个像素...", step, step_draw_operations.len());
+                
+                // 对当前步骤的像素进行批量发送
+                for chunk in step_draw_operations.chunks(cli.max_batch_size) {
+                    match client.paint_batch(chunk.to_vec()).await {
+                        Ok(()) => {
+                            processed_progressive += chunk.len();
+                            debug!("Step {} 批次发送完成，已发送: {}/{} 像素", step, processed_progressive, total_pixels);
+                            
+                            // 在批次之间添加延迟以避免速率限制
+                            tokio::time::sleep(tokio::time::Duration::from_millis(cli.delay)).await;
+                        }
+                        Err(e) => {
+                            error!("Step {} 批量绘制错误: {:?}", step, e);
+                            // 继续处理下一个批次，而不是中断
+                        }
+                    }
+                }
+
+                info!("Step {} 绘制完成，累计发送: {}/{} 像素", step, processed_progressive, total_pixels);
+
+                // 在每个步骤之间添加延迟，以产生“逐步清晰”的视觉效果
+                // 注意：这里不使用 cli.delay，可能需要一个独立的参数控制步骤间延时，或者就用 cli.delay
+                // 为了简单，我们仍使用 cli.delay
+                if step < steps - 1 { // 最后一步后不需要等待
+                    tokio::time::sleep(tokio::time::Duration::from_millis(cli.delay)).await;
+                }
+            }
+
+            info!("渐进式绘制发送完成，总共发送了 {} 个像素（不等待响应确认）", processed_progressive);
+        } else if cli.batch_mode && !draw_operations.is_empty() {
             // 使用批量绘制模式（粘包机制），支持分批，不等待响应
             info!("使用批量绘制模式，最大批量大小: {}, 总共 {} 个像素...", cli.max_batch_size, total_pixels);
             
