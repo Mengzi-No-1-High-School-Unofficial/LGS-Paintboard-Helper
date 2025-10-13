@@ -2,6 +2,7 @@ use clap::Parser;
 use image::{open, RgbaImage};
 use std::path::PathBuf;
 use winter_paintboard_sdk::{PaintboardClient, Rgb, Pos, config::Config};
+use log::{debug, error, info, warn};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -57,27 +58,30 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize the logger with env_logger
+    env_logger::init();
+    
     let cli = Cli::parse();
 
     // 获取或使用提供的 Token
     let token = if let Some(access_key) = &cli.access_key {
         // 使用 UID 和访问密钥获取新 Token
-        println!("正在使用 UID 和访问密钥获取 Token...");
+        info!("正在使用 UID 和访问密钥获取 Token...");
         let config = Config::default();
         let http_client = PaintboardClient::new(config).await?;
         let token = http_client.get_token(cli.uid, access_key).await?;
-        println!("成功获取 Token: {}...", &token[..8]); // 显示开头部分
+        info!("成功获取 Token: {}...", &token[..8]); // 显示开头部分
         token
     } else if let Some(provided_token) = &cli.token {
         // 直接使用提供的 Token
         provided_token.clone()
     } else {
-        eprintln!("错误: 必须提供 --token 或 --access-key");
+        error!("错误: 必须提供 --token 或 --access-key");
         std::process::exit(1);
     };
 
     // 1. 读取并解码PNG图片
-    println!("正在读取图片: {:?}", cli.image);
+    info!("正在读取图片: {:?}", cli.image);
     let mut img = open(&cli.image)?;
     
     // 2. 根据用户指定的尺寸进行缩放
@@ -85,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target_height = cli.height.unwrap_or_else(|| img.height());
     
     if target_width != img.width() || target_height != img.height() {
-        println!("正在缩放图片从 {}x{} 到 {}x{}", img.width(), img.height(), target_width, target_height);
+        info!("正在缩放图片从 {}x{} 到 {}x{}", img.width(), img.height(), target_width, target_height);
         img = img.resize_exact(target_width, target_height, image::imageops::Triangle);
     }
 
@@ -93,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (img_width, img_height) = rgba_img.dimensions();
 
     // 3. 初始化绘板客户端配置
-    println!("正在初始化绘板客户端...");
+    info!("正在初始化绘板客户端...");
     let mut config = Config::default(); // 使用默认配置
     // 确保使用正确的WebSocket端点
     config.ws_url = cli.ws_url.unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
@@ -103,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.set_auth(cli.uid, token);
 
     // 4. 将图片像素数据转换为绘板绘制请求
-    println!("正在准备绘制数据...");
+    info!("正在准备绘制数据...");
     let mut draw_operations = Vec::new();
     for (x, y, pixel) in rgba_img.enumerate_pixels() {
         // 获取像素的RGBA值
@@ -120,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 将坐标转换为有效的u16值（0-999 for x, 0-599 for y） 
         if board_x >= 1000 || board_y >= 600 {
-            println!("警告: 坐标({}, {})超出了画板边界，将被忽略", board_x, board_y);
+            warn!("坐标({}, {})超出了画板边界，将被忽略", board_x, board_y);
             continue;
         }
         
@@ -130,14 +134,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         draw_operations.push((pos, color));
     }
+    
+    info!("总共准备了 {} 个绘制操作", draw_operations.len());
 
     // 5. 调用SDK进行绘制
-    println!("正在绘制图片到画板...");
+    info!("正在绘制图片到画板...");
     let total_pixels = draw_operations.len();
     
     if cli.batch_mode && !draw_operations.is_empty() {
         // 使用批量绘制模式（粘包机制），支持分批，不等待响应
-        println!("使用批量绘制模式，最大批量大小: {}, 总共 {} 个像素...", cli.max_batch_size, total_pixels);
+        info!("使用批量绘制模式，最大批量大小: {}, 总共 {} 个像素...", cli.max_batch_size, total_pixels);
         
         let mut processed = 0;
         
@@ -146,19 +152,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match client.paint_batch(chunk.to_vec()).await {
                 Ok(()) => {
                     processed += chunk.len();
-                    println!("批次发送完成，已发送: {}/{} 像素", processed, total_pixels);
+                    debug!("批次发送完成，已发送: {}/{} 像素", processed, total_pixels);
                     
                     // 在批次之间添加延迟以避免速率限制
                     tokio::time::sleep(tokio::time::Duration::from_millis(cli.delay)).await;
                 }
                 Err(e) => {
-                    eprintln!("批量绘制错误: {:?}", e);
+                    error!("批量绘制错误: {:?}", e);
                     // 继续处理下一个批次，而不是中断
                 }
             }
         }
         
-        println!("批量绘制发送完成，总共发送了 {} 个像素（不等待响应确认）", processed);
+        info!("批量绘制发送完成，总共发送了 {} 个像素（不等待响应确认）", processed);
     } else if !cli.batch_mode {
         // 使用逐个绘制模式
         let mut successful_draws = 0;
@@ -170,44 +176,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match result.status {
                         winter_paintboard_sdk::models::PaintStatus::Success => {
                             successful_draws += 1;
+                            debug!("绘制成功 (位置: {},{}) - Drawing ID: {}", pos.x, pos.y, result.drawing_id);
                         },
                         winter_paintboard_sdk::models::PaintStatus::Cooldown => {
-                            println!("绘制冷却中，稍等... (位置: {},{}) - Drawing ID: {}", pos.x, pos.y, result.drawing_id);
+                            warn!("绘制冷却中，稍等... (位置: {},{}) - Drawing ID: {}", pos.x, pos.y, result.drawing_id);
                             failed_draws += 1;
                             // 等待一段时间以避免速率限制
                             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                         },
                         winter_paintboard_sdk::models::PaintStatus::InvalidToken => {
-                            println!("无效的Token: {:?} (位置: {},{}) - Drawing ID: {}", result, pos.x, pos.y, result.drawing_id);
+                            error!("无效的Token: {:?} (位置: {},{}) - Drawing ID: {}", result, pos.x, pos.y, result.drawing_id);
                             failed_draws += 1;
                         },
                         winter_paintboard_sdk::models::PaintStatus::NoPermission => {
-                            println!("无权限绘制: {:?} (位置: {},{}) - Drawing ID: {}", result, pos.x, pos.y, result.drawing_id);
+                            error!("无权限绘制: {:?} (位置: {},{}) - Drawing ID: {}", result, pos.x, pos.y, result.drawing_id);
                             failed_draws += 1;
                         },
                         winter_paintboard_sdk::models::PaintStatus::InvalidCoordinate => {
-                            println!("无效坐标: {:?} (位置: {},{}) - Drawing ID: {}", result, pos.x, pos.y, result.drawing_id);
+                            error!("无效坐标: {:?} (位置: {},{}) - Drawing ID: {}", result, pos.x, pos.y, result.drawing_id);
                             failed_draws += 1;
                         },
                         winter_paintboard_sdk::models::PaintStatus::Timeout => {
-                            println!("请求超时: {:?} (位置: {},{}) - Drawing ID: {}", result, pos.x, pos.y, result.drawing_id);
+                            error!("请求超时: {:?} (位置: {},{}) - Drawing ID: {}", result, pos.x, pos.y, result.drawing_id);
                             failed_draws += 1;
                         },
                         _ => {
-                            println!("绘制失败: {:?} (位置: {},{}) - Drawing ID: {}", result, pos.x, pos.y, result.drawing_id);
+                            error!("绘制失败: {:?} (位置: {},{}) - Drawing ID: {}", result, pos.x, pos.y, result.drawing_id);
                             failed_draws += 1;
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("绘制错误: {:?} (位置: {},{})", e, pos.x, pos.y);
+                    error!("绘制错误: {:?} (位置: {},{})", e, pos.x, pos.y);
                     failed_draws += 1;
                 }
             }
             
             // 添加进度显示
-            if (i + 1) % 10 == 0 || i == total_pixels - 1 {
-                println!("进度: {}/{} 像素, 成功: {}, 失败: {}", i + 1, total_pixels, successful_draws, failed_draws);
+            if (i + 1) % 100 == 0 || i == total_pixels - 1 {
+                info!("进度: {}/{} 像素, 成功: {}, 失败: {}", i + 1, total_pixels, successful_draws, failed_draws);
             }
             
             // 为避免速率限制，添加小延迟
@@ -217,7 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("图片绘制完成！图片尺寸: {}x{}, 起始坐标: ({}, {})", img_width, img_height, cli.x, cli.y);
+    info!("图片绘制完成！图片尺寸: {}x{}, 起始坐标: ({}, {})", img_width, img_height, cli.x, cli.y);
     
     Ok(())
 }

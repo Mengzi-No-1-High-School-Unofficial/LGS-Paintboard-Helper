@@ -13,9 +13,13 @@ clap = { workspace = true }
 image = { workspace = true }
 tokio = { workspace = true }
 winter-paintboard-sdk = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
 
 [workspace.dependencies]
 clap = { version = "4.0", features = ["derive"] }
 image = { version = "0.24", features = ["png"] }
 tokio = { version = "1.0", features = ["full"] }
 winter-paintboard-sdk = { path = "crates/winter-paintboard-sdk" }
+log = "0.4"
+env_logger = "0.10"

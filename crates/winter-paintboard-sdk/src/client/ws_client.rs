@@ -9,6 +9,7 @@ use tokio::sync::{Mutex as TokioMutex, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures::{SinkExt, StreamExt};
 use url::Url;
+use log::{debug, error, info, warn, trace};
 
 /// WebSocket client for Winter Paintboard API
 pub struct WsClient {
@@ -43,16 +44,16 @@ impl WsClient {
 
     /// Connect to the WebSocket server
     pub async fn connect(&mut self) -> Result<(), PaintboardError> {
-        println!("[DEBUG] 开始连接到 WebSocket 服务器: {}", self.config.ws_url);
+        debug!("开始连接到 WebSocket 服务器: {}", self.config.ws_url);
         let url = Url::parse(&self.config.ws_url)
             .map_err(|e| {
-                println!("[DEBUG] URL 解析失败: {}", e);
+                debug!("URL 解析失败: {}", e);
                 PaintboardError::InvalidUrl(e.to_string())
             })?;
         
         match connect_async(url).await {
             Ok((ws_stream, _)) => {
-                println!("[DEBUG] WebSocket 连接建立成功");
+                debug!("WebSocket 连接建立成功");
                 
                 // Store the connection
                 let mut conn_guard = self.connection.lock().await;
@@ -62,11 +63,11 @@ impl WsClient {
                 // Start the message processing task
                 self.start_message_processing_task().await;
                 
-                println!("[DEBUG] 连接和消息处理任务初始化完成");
+                debug!("连接和消息处理任务初始化完成");
                 Ok(())
             }
             Err(e) => {
-                println!("[DEBUG] WebSocket 连接失败: {}", e);
+                debug!("WebSocket 连接失败: {}", e);
                 Err(PaintboardError::WebSocket(e.to_string()))
             }
         }
@@ -99,29 +100,29 @@ impl WsClient {
                             drop(conn_guard); // Release the lock before processing
                             match message {
                                 Message::Binary(data) => {
-                                    println!("[DEBUG] 收到二进制消息，长度: {}", data.len());
+                                    trace!("收到二进制消息，长度: {}", data.len());
                                     // Parse the binary message
                                     if let Ok(protocol_msg) = ProtocolMessage::parse(&data) {
                                         match protocol_msg {
                                             ProtocolMessage::HeartbeatPing => {
-                                                println!("[DEBUG] 收到服务器心跳 PING");
+                                                trace!("收到服务器心跳 PING");
                                                 // Respond to heartbeat ping
                                                 let pong_msg = vec![OpCode::HeartbeatPong as u8];
-                                                println!("[DEBUG] 发送心跳 PONG 响应");
+                                                trace!("发送心跳 PONG 响应");
                                                 let mut send_conn_guard = connection_clone.lock().await;
                                                 if let Some(ref mut ws_stream) = *send_conn_guard {
                                                     match ws_stream.send(Message::Binary(pong_msg)).await {
                                                         Ok(_) => {
-                                                            println!("[DEBUG] 心跳 PONG 发送成功");
+                                                            trace!("心跳 PONG 发送成功");
                                                         }
                                                         Err(e) => {
-                                                            println!("[DEBUG] 心跳 PONG 发送失败: {}", e);
+                                                            error!("心跳 PONG 发送失败: {}", e);
                                                         }
                                                     }
                                                 }
                                             },
                                             ProtocolMessage::PaintResult { drawing_id, status } => {
-                                                println!("[DEBUG] 收到绘图结果，drawing_id: {}, status: {}", drawing_id, status);
+                                                trace!("收到绘图结果，drawing_id: {}, status: {}", drawing_id, status);
                                                 // Find the matching pending request based on drawing_id
                                                 // For now, send to the first available channel as a workaround
                                                 // In a complete implementation, we'd need to maintain a mapping between
@@ -138,64 +139,64 @@ impl WsClient {
                                                             message: format!("Paint result received with status: {}", status),
                                                         };
                                                         drop(channels_guard); // Release the lock before sending
-                                                        println!("[DEBUG] 发送 PaintResult 到响应通道");
+                                                        trace!("发送 PaintResult 到响应通道");
                                                         let _ = tx.send(paint_result);
-                                                        println!("[DEBUG] PaintResult 已发送");
+                                                        trace!("PaintResult 已发送");
                                                     }
                                                 } else {
-                                                    println!("[DEBUG] 没有找到匹配的响应通道");
+                                                    debug!("没有找到匹配的响应通道");
                                                 }
                                             },
                                             ProtocolMessage::PaintEvent { pos, color } => {
                                                 // Handle paint events (for read-only clients)
-                                                println!("Received paint event at ({}, {}) with color ({}, {}, {})", 
+                                                debug!("Received paint event at ({}, {}) with color ({}, {}, {})", 
                                                          pos.x, pos.y, color.r, color.g, color.b);
                                             },
                                             ProtocolMessage::Unknown { opcode, data } => {
-                                                println!("Received unknown message with opcode: {}, data length: {}", opcode, data.len());
+                                                warn!("Received unknown message with opcode: {}, data length: {}", opcode, data.len());
                                             },
                                             _ => {
-                                                println!("[DEBUG] 收到其他协议消息: {:?}", protocol_msg);
+                                                trace!("收到其他协议消息: {:?}", protocol_msg);
                                             }
                                         }
                                     } else {
-                                        println!("[DEBUG] 无法解析二进制消息: {:?}", &data[..std::cmp::min(10, data.len())]);
+                                        debug!("无法解析二进制消息: {:?}", &data[..std::cmp::min(10, data.len())]);
                                     }
                                 },
                                 Message::Close(close_frame) => {
                                     // Connection closed by server
-                                    println!("[DEBUG] WebSocket 连接被服务器关闭: {:?}", close_frame);
+                                    info!("WebSocket 连接被服务器关闭: {:?}", close_frame);
                                     break;
                                 },
                                 Message::Text(text) => {
-                                    println!("[DEBUG] 收到意外的文本消息: {}", text);
+                                    warn!("收到意外的文本消息: {}", text);
                                 },
                                 Message::Ping(_) => {
-                                    println!("[DEBUG] 收到 WebSocket ping");
+                                    trace!("收到 WebSocket ping");
                                     // Respond to ping with pong
                                     let mut send_conn_guard = connection_clone.lock().await;
                                     if let Some(ref mut ws_stream) = *send_conn_guard {
                                         let _ = ws_stream.send(Message::Pong(vec![])).await;
-                                        println!("[DEBUG] 发送 WebSocket pong 响应");
+                                        trace!("发送 WebSocket pong 响应");
                                     }
                                 },
                                 Message::Pong(_) => {
-                                    println!("[DEBUG] 收到 WebSocket pong");
+                                    trace!("收到 WebSocket pong");
                                 },
                                 _ => {
-                                    println!("[DEBUG] 收到其他类型的消息");
+                                    trace!("收到其他类型的消息");
                                 }
                             }
                         },
                         Some(Err(e)) => {
                             drop(conn_guard);
-                            println!("[DEBUG] WebSocket 错误: {}", e);
+                            error!("WebSocket 错误: {}", e);
                             break;
                         },
                         None => {
                             drop(conn_guard);
                             // Connection closed
-                            println!("[DEBUG] WebSocket 连接关闭 (None received)");
+                            debug!("WebSocket 连接关闭 (None received)");
                             break;
                         }
                     }
@@ -203,20 +204,20 @@ impl WsClient {
                     drop(conn_guard);
                     // Check if connection has been inactive for too long
                     if last_heartbeat_time.elapsed() > std::time::Duration::from_secs(60) {
-                        println!("[DEBUG] 连接长时间无活动，可能已断开");
+                        warn!("连接长时间无活动，可能已断开");
                         break;
                     }
                     // Wait a bit before trying to process again
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
             }
-            println!("[DEBUG] 消息处理任务结束");
+            debug!("消息处理任务结束");
         }));
     }
 
     /// Paint a pixel at the given position with the specified color
     pub async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError> {
-        println!("[DEBUG] 开始发送单个绘图请求，位置: ({}, {})", pos.x, pos.y);
+        debug!("开始发送单个绘图请求，位置: ({}, {})", pos.x, pos.y);
         
         // Check if we have authentication
         let uid = self.uid.ok_or(PaintboardError::Auth("UID not set".to_string()))?;
@@ -226,17 +227,17 @@ impl WsClient {
         {
             let conn_guard = self.connection.lock().await;
             if conn_guard.is_none() {
-                println!("[DEBUG] 连接不存在，建立新连接");
+                debug!("连接不存在，建立新连接");
                 drop(conn_guard); // 释放锁以调用 connect
                 self.connect().await?;
             } else {
-                println!("[DEBUG] 连接已存在，复用连接");
+                debug!("连接已存在，复用连接");
             }
         }
         
         // Generate a unique paint ID
         let paint_id = rand::random::<u64>();
-        println!("[DEBUG] 生成绘图ID: {}", paint_id);
+        debug!("生成绘图ID: {}", paint_id);
         
         // Create the paint operation - UPDATE to match the protocol format
         let operation = PaintOperation {
@@ -249,7 +250,7 @@ impl WsClient {
         
         // Get the binary representation
         let binary_data = operation.to_binary();
-        println!("[DEBUG] 绘图操作二进制数据长度: {}, 前几个字节: {:?}", binary_data.len(), &binary_data[..std::cmp::min(10, binary_data.len())]);
+        trace!("绘图操作二进制数据长度: {}, 前几个字节: {:?}", binary_data.len(), &binary_data[..std::cmp::min(10, binary_data.len())]);
         
         // Create a one-shot channel to receive the response
         let (response_tx, response_rx) = oneshot::channel();
@@ -258,7 +259,7 @@ impl WsClient {
         {
             let mut channels = self.response_channels.lock().await;
             channels.insert(paint_id, response_tx);
-            println!("[DEBUG] 已将响应通道添加到映射，当前通道数: {}", channels.len());
+            debug!("已将响应通道添加到映射，当前通道数: {}", channels.len());
         }
         
         // Send the message
@@ -266,42 +267,42 @@ impl WsClient {
             let mut conn_guard = self.connection.lock().await;
             match conn_guard.as_mut() {
                 Some(ws_stream) => {
-                    println!("[DEBUG] 发送绘图消息...");
+                    debug!("发送绘图消息...");
                     match ws_stream.send(Message::Binary(binary_data)).await {
                         Ok(_) => {
-                            println!("[DEBUG] 绘图消息发送成功");
+                            debug!("绘图消息发送成功");
                         }
                         Err(e) => {
-                            println!("[DEBUG] 发送绘图消息失败: {}", e);
+                            error!("发送绘图消息失败: {}", e);
                             return Err(PaintboardError::WebSocket(e.to_string()));
                         }
                     }
                 }
                 None => {
-                    println!("[DEBUG] 连接不存在，发送失败");
+                    error!("连接不存在，发送失败");
                     return Err(PaintboardError::ConnectionClosed);
                 }
             }
         }
         
         // Wait for the response with a timeout
-        println!("[DEBUG] 等待绘图结果响应...");
+        debug!("等待绘图结果响应...");
         match tokio::time::timeout(std::time::Duration::from_secs(10), response_rx).await {
             Ok(Ok(result)) => {
-                println!("[DEBUG] 成功接收到绘图结果");
+                debug!("成功接收到绘图结果");
                 Ok(result)
             },
             Ok(Err(_)) => {
-                println!("[DEBUG] 响应通道关闭");
+                debug!("响应通道关闭");
                 Err(PaintboardError::ResponseChannelClosed)
             },
             Err(_) => {
-                println!("[DEBUG] 等待响应超时");
+                debug!("等待响应超时");
                 // Remove the channel if timeout occurred
                 {
                     let mut channels = self.response_channels.lock().await;
                     if channels.remove(&paint_id).is_some() {
-                        println!("[DEBUG] 已清理超时的响应通道");
+                        debug!("已清理超时的响应通道");
                     }
                 }
                 Err(PaintboardError::Timeout)
@@ -312,7 +313,7 @@ impl WsClient {
     /// Send multiple paint operations together using sticky packet mechanism, without waiting for responses
     pub async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
         let ops_count = operations.len(); // 存储操作数量以便后面使用
-        println!("[DEBUG] 开始发送批量绘图请求，操作数量: {}", ops_count);
+        debug!("开始发送批量绘图请求，操作数量: {}", ops_count);
         
         if operations.is_empty() {
             return Ok(());
@@ -343,17 +344,17 @@ impl WsClient {
             all_binary_data.extend(binary_data); // This is the sticky packet mechanism - concatenating all binary data
         }
         
-        println!("[DEBUG] 批量操作二进制数据总长度: {}, 操作数量: {}", all_binary_data.len(), ops_count);
+        debug!("批量操作二进制数据总长度: {}, 操作数量: {}", all_binary_data.len(), ops_count);
         
         // Ensure we're connected
         {
             let conn_guard = self.connection.lock().await;
             if conn_guard.is_none() {
-                println!("[DEBUG] 批量发送 - 连接不存在，建立新连接");
+                debug!("批量发送 - 连接不存在，建立新连接");
                 drop(conn_guard); // 释放锁以调用 connect
                 self.connect().await?;
             } else {
-                println!("[DEBUG] 批量发送 - 连接已存在，复用连接");
+                debug!("批量发送 - 连接已存在，复用连接");
             }
         }
         
@@ -362,19 +363,19 @@ impl WsClient {
             let mut conn_guard = self.connection.lock().await;
             match conn_guard.as_mut() {
                 Some(ws_stream) => {
-                    println!("[DEBUG] 发送批量消息...");
+                    debug!("发送批量消息...");
                     match ws_stream.send(Message::Binary(all_binary_data)).await {
                         Ok(_) => {
-                            println!("[DEBUG] 批量消息发送成功");
+                            debug!("批量消息发送成功");
                         }
                         Err(e) => {
-                            println!("[DEBUG] 发送批量消息失败: {}", e);
+                            error!("发送批量消息失败: {}", e);
                             return Err(PaintboardError::WebSocket(e.to_string()));
                         }
                     }
                 }
                 None => {
-                    println!("[DEBUG] 批量发送 - 连接不存在，发送失败");
+                    error!("批量发送 - 连接不存在，发送失败");
                     return Err(PaintboardError::ConnectionClosed);
                 }
             }
