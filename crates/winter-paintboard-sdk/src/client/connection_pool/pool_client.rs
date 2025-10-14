@@ -1,7 +1,6 @@
 use std::sync::Arc;
-use tokio::sync::{Mutex, Semaphore};
-use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
+use std::time::Duration;
 use async_trait::async_trait;
 
 use crate::{
@@ -12,203 +11,11 @@ use crate::{
     PaintboardClientTrait,
 };
 
-// 连接池项，包含连接和元数据
-struct PoolItem {
-    client: PaintboardClient,
-    last_used: Instant,
-    usage_count: u64,
-    is_broken: bool,
-}
-
-impl PoolItem {
-    fn new(client: PaintboardClient) -> Self {
-        Self {
-            client,
-            last_used: Instant::now(),
-            usage_count: 0,
-            is_broken: false,
-        }
-    }
-}
-
-// 连接池管理器
-pub struct ConnectionPool {
-    pool: Arc<Mutex<VecDeque<PoolItem>>>,
-    semaphore: Arc<Semaphore>,
-    min_connections: usize,
-    max_connections: usize,
-    config: Config,
-    uid: Option<u32>,
-    token: Option<String>,
-    active_count: Arc<Mutex<usize>>, // 当前活跃连接数
-}
-
-impl ConnectionPool {
-    pub fn new(config: Config, min_connections: usize, max_connections: usize) -> Self {
-        let semaphore = Arc::new(Semaphore::new(max_connections));
-        let pool = Arc::new(Mutex::new(VecDeque::new()));
-        let active_count = Arc::new(Mutex::new(0));
-        
-        Self {
-            pool,
-            semaphore,
-            min_connections,
-            max_connections,
-            config,
-            uid: None,
-            token: None,
-            active_count,
-        }
-    }
-    
-    pub fn set_auth(&mut self, uid: u32, token: String) {
-        self.uid = Some(uid);
-        self.token = Some(token);
-    }
-    
-    // 获取一个连接，带有负载均衡
-    pub async fn acquire(&self) -> Result<PaintboardClient, PaintboardError> {
-        // 创建信号量许可以确保不超过最大连接数
-        let _permit = self.semaphore.acquire().await
-            .map_err(|_| PaintboardError::ConnectionClosed)?;
-        
-        // 尝试从池中获取一个连接
-        let mut pool_guard = self.pool.lock().await;
-        if let Some(mut pool_item) = pool_guard.pop_front() {
-            // 检查连接是否已经失效
-            if pool_item.is_broken {
-                // 连接已损坏，丢弃并创建新连接
-                drop(pool_guard);
-                return self.create_new_connection().await;
-            }
-            
-            // 更新连接使用情况
-            pool_item.usage_count += 1;
-            pool_item.last_used = Instant::now();
-            let mut client = pool_item.client;
-            
-            // 确保连接有认证信息
-            if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
-                client.set_auth(uid, token.clone());
-            }
-            
-            // 增加活跃连接数
-            *self.active_count.lock().await += 1;
-            
-            drop(pool_guard);
-            Ok(client)
-        } else {
-            drop(pool_guard);
-            // 如果池中没有连接，创建新连接
-            let mut client = self.create_new_connection().await?;
-            
-            // 确保新连接有认证信息
-            if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
-                client.set_auth(uid, token.clone());
-            }
-            
-            // 增加活跃连接数
-            *self.active_count.lock().await += 1;
-            
-            Ok(client)
-        }
-    }
-    
-    // 释放连接归还池中
-    pub async fn release(&self, mut client: PaintboardClient, is_broken: bool) {
-        // 减少活跃连接数
-        {
-            let mut active = self.active_count.lock().await;
-            if *active > 0 {
-                *active -= 1;
-            }
-        }
-        
-        // 释放信号量许可
-        drop(self.semaphore.acquire().await);
-        
-        let mut pool_guard = self.pool.lock().await;
-        if pool_guard.len() < self.max_connections && !is_broken {
-            // 确保连接有认证信息
-            if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
-                client.set_auth(uid, token.clone());
-            }
-            
-            let pool_item = PoolItem {
-                client,
-                last_used: Instant::now(),
-                usage_count: 0, // 归还时重置使用次数以便重新计算
-                is_broken: false,
-            };
-            pool_guard.push_back(pool_item);
-        }
-        // 否则丢弃连接
-    }
-    
-    // 创建新连接
-    async fn create_new_connection(&self) -> Result<PaintboardClient, PaintboardError> {
-        let client = PaintboardClient::new(self.config.clone()).await?;
-        Ok(client)
-    }
-    
-    // 获取当前池中的连接数
-    pub async fn pool_size(&self) -> usize {
-        let pool_guard = self.pool.lock().await;
-        pool_guard.len()
-    }
-    
-    // 获取活跃连接数
-    pub async fn active_count(&self) -> usize {
-        let active = self.active_count.lock().await;
-        *active
-    }
-    
-    // 定期清理不活跃连接
-    pub async fn cleanup_inactive_connections(&self, max_idle_time: Duration) {
-        let mut pool_guard = self.pool.lock().await;
-        pool_guard.retain(|item| {
-            item.last_used.elapsed() <= max_idle_time
-        });
-    }
-}
-
-// 通用的故障转移函数
-async fn fault_tolerance<T, F, Fut>(
-    pool: &ConnectionPool,
-    operation: F,
-) -> Result<T, PaintboardError>
-where
-    F: Fn(PaintboardClient) -> Fut,
-    Fut: std::future::Future<Output = Result<T, PaintboardError>> + Send,
-{
-    // 尝试最多3次
-    let mut attempts = 0;
-    let max_attempts = 3;
-    
-    loop {
-        let client = match pool.acquire().await {
-            Ok(client) => client,
-            Err(e) => return Err(e),
-        };
-        
-        match operation(client).await {
-            Ok(result) => {
-                return Ok(result);
-            }
-            Err(e) => {
-                attempts += 1;
-                if attempts >= max_attempts {
-                    return Err(e);
-                }
-                // 继续下一次尝试
-            }
-        }
-    }
-}
+use super::pool::ConnectionPool;
 
 // ConnectionPoolClient 实现
 pub struct ConnectionPoolClient {
-    pool: ConnectionPool,
+    pub pool: ConnectionPool,
     event_client: Arc<Mutex<Option<PaintboardClient>>>, // 专门用于事件监听的连接
 }
 
@@ -306,6 +113,9 @@ impl PaintboardClientTrait for ConnectionPoolClient {
     }
 
     async fn get_board(&self) -> Result<Board, PaintboardError> {
+        // 增加请求计数
+        self.pool.increment_requests(1).await;
+        
         // 尝试最多3次
         let mut attempts = 0;
         let max_attempts = 3;
@@ -313,13 +123,22 @@ impl PaintboardClientTrait for ConnectionPoolClient {
         loop {
             let mut client = match self.pool.acquire().await {
                 Ok(client) => client,
-                Err(e) => return Err(e),
+                Err(e) => {
+                    self.pool.increment_errors().await; // 记录错误
+                    return Err(e);
+                }
             };
             
             match client.get_board().await {
                 Ok(result) => {
                     // 操作成功，归还连接
                     self.pool.release(client, false).await;
+                    
+                    // 如果重试过，记录重试成功
+                    if attempts > 0 {
+                        self.pool.increment_retry(true).await;
+                    }
+                    
                     return Ok(result);
                 }
                 Err(e) => {
@@ -327,8 +146,12 @@ impl PaintboardClientTrait for ConnectionPoolClient {
                     if attempts >= max_attempts {
                         // 已达到最大重试次数，归还损坏的连接
                         self.pool.release(client, true).await;
+                        self.pool.increment_errors().await; // 记录错误
                         return Err(e);
                     }
+                    
+                    // 记录重试
+                    self.pool.increment_retry(false).await;
                     
                     // 连接可能已损坏，归还并标记为损坏
                     self.pool.release(client, true).await;
@@ -340,6 +163,9 @@ impl PaintboardClientTrait for ConnectionPoolClient {
 
     async fn get_token(&self, uid: u32, access_key: &str) -> Result<String, PaintboardError> {
         let access_key = access_key.to_string(); // 创建一个拥有所有权的字符串
+        // 增加请求计数
+        self.pool.increment_requests(1).await;
+        
         // 尝试最多3次
         let mut attempts = 0;
         let max_attempts = 3;
@@ -347,13 +173,22 @@ impl PaintboardClientTrait for ConnectionPoolClient {
         loop {
             let mut client = match self.pool.acquire().await {
                 Ok(client) => client,
-                Err(e) => return Err(e),
+                Err(e) => {
+                    self.pool.increment_errors().await; // 记录错误
+                    return Err(e);
+                }
             };
             
             match client.get_token(uid, &access_key).await {
                 Ok(result) => {
                     // 操作成功，归还连接
                     self.pool.release(client, false).await;
+                    
+                    // 如果重试过，记录重试成功
+                    if attempts > 0 {
+                        self.pool.increment_retry(true).await;
+                    }
+                    
                     return Ok(result);
                 }
                 Err(e) => {
@@ -361,8 +196,12 @@ impl PaintboardClientTrait for ConnectionPoolClient {
                     if attempts >= max_attempts {
                         // 已达到最大重试次数，归还损坏的连接
                         self.pool.release(client, true).await;
+                        self.pool.increment_errors().await; // 记录错误
                         return Err(e);
                     }
+                    
+                    // 记录重试
+                    self.pool.increment_retry(false).await;
                     
                     // 连接可能已损坏，归还并标记为损坏
                     self.pool.release(client, true).await;
@@ -373,6 +212,9 @@ impl PaintboardClientTrait for ConnectionPoolClient {
     }
 
     async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError> {
+        // 增加请求计数
+        self.pool.increment_requests(1).await;
+        
         // 尝试最多3次
         let mut attempts = 0;
         let max_attempts = 3;
@@ -380,13 +222,22 @@ impl PaintboardClientTrait for ConnectionPoolClient {
         loop {
             let mut client = match self.pool.acquire().await {
                 Ok(client) => client,
-                Err(e) => return Err(e),
+                Err(e) => {
+                    self.pool.increment_errors().await; // 记录错误
+                    return Err(e);
+                }
             };
             
             match client.paint(pos, color).await {
                 Ok(result) => {
                     // 操作成功，归还连接
                     self.pool.release(client, false).await;
+                    
+                    // 如果重试过，记录重试成功
+                    if attempts > 0 {
+                        self.pool.increment_retry(true).await;
+                    }
+                    
                     return Ok(result);
                 }
                 Err(e) => {
@@ -394,8 +245,12 @@ impl PaintboardClientTrait for ConnectionPoolClient {
                     if attempts >= max_attempts {
                         // 已达到最大重试次数，归还损坏的连接
                         self.pool.release(client, true).await;
+                        self.pool.increment_errors().await; // 记录错误
                         return Err(e);
                     }
+                    
+                    // 记录重试
+                    self.pool.increment_retry(false).await;
                     
                     // 连接可能已损坏，归还并标记为损坏
                     self.pool.release(client, true).await;
@@ -406,6 +261,9 @@ impl PaintboardClientTrait for ConnectionPoolClient {
     }
 
     async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
+        // 增加批量请求计数
+        self.pool.increment_batch_requests(operations.len() as u64).await;
+        
         // 尝试最多3次
         let mut attempts = 0;
         let max_attempts = 3;
@@ -413,13 +271,22 @@ impl PaintboardClientTrait for ConnectionPoolClient {
         loop {
             let mut client = match self.pool.acquire().await {
                 Ok(client) => client,
-                Err(e) => return Err(e),
+                Err(e) => {
+                    self.pool.increment_errors().await; // 记录错误
+                    return Err(e);
+                }
             };
             
             match client.paint_batch(operations.clone()).await {
                 Ok(result) => {
                     // 操作成功，归还连接
                     self.pool.release(client, false).await;
+                    
+                    // 如果重试过，记录重试成功
+                    if attempts > 0 {
+                        self.pool.increment_retry(true).await;
+                    }
+                    
                     return Ok(result);
                 }
                 Err(e) => {
@@ -427,14 +294,87 @@ impl PaintboardClientTrait for ConnectionPoolClient {
                     if attempts >= max_attempts {
                         // 已达到最大重试次数，归还损坏的连接
                         self.pool.release(client, true).await;
+                        self.pool.increment_errors().await; // 记录错误
                         return Err(e);
                     }
+                    
+                    // 记录重试
+                    self.pool.increment_retry(false).await;
                     
                     // 连接可能已损坏，归还并标记为损坏
                     self.pool.release(client, true).await;
                     // 继续下一次尝试
                 }
             }
+        }
+    }
+}
+
+// 添加监控相关的监控数据结构和功能，如果需要的话
+#[derive(Debug, Clone)]
+pub struct PoolMetrics {
+    // 连接池基础指标
+    pub pool_size: usize,           // 池中连接数
+    pub active_count: usize,        // 活跃连接数
+    pub min_connections: usize,     // 最小连接数
+    pub max_connections: usize,     // 最大连接数
+    pub total_usage_count: u64,     // 总使用次数
+    pub created_count: u64,         // 创建的连接数
+    pub released_count: u64,        // 释放的连接数
+    pub broken_count: u64,          // 损坏的连接数
+    
+    // 发包相关指标
+    pub total_requests: u64,        // 总请求数
+    pub total_packets: u64,         // 总发包数（包括粘包）
+    pub batch_requests: u64,        // 批量请求次数
+    
+    // 错误相关指标
+    pub total_errors: u64,          // 总错误数
+    pub retry_count: u64,           // 重试次数
+    pub retry_success_count: u64,   // 重试成功次数
+    pub retry_failed_count: u64,    // 重试失败次数
+    
+    // 统计时间
+    pub timestamp: std::time::SystemTime, // 统计时间戳
+}
+
+impl PoolMetrics {
+    pub fn new() -> Self {
+        Self {
+            pool_size: 0,
+            active_count: 0,
+            min_connections: 0,
+            max_connections: 0,
+            total_usage_count: 0,
+            created_count: 0,
+            released_count: 0,
+            broken_count: 0,
+            total_requests: 0,
+            total_packets: 0,
+            batch_requests: 0,
+            total_errors: 0,
+            retry_count: 0,
+            retry_success_count: 0,
+            retry_failed_count: 0,
+            timestamp: std::time::SystemTime::now(),
+        }
+    }
+    
+    // 计算错误率
+    pub fn error_rate(&self) -> f64 {
+        if self.total_requests == 0 {
+            0.0
+        } else {
+            (self.total_errors as f64) / (self.total_requests as f64) * 100.0
+        }
+    }
+    
+    // 计算重试成功率
+    pub fn retry_success_rate(&self) -> f64 {
+        if self.retry_count == 0 {
+            0.0
+        } else {
+            (self.retry_success_count as f64) / (self.retry_count as f64) * 100.0
         }
     }
 }
