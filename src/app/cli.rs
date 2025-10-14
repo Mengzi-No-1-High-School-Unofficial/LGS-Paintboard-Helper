@@ -95,4 +95,16 @@ pub struct Cli {
     /// 恢复像素时的延迟（毫秒）(可选，默认为10毫秒)
     #[arg(long, default_value_t = 10)]
     pub restore_delay: u64,
+
+    /// 客户端类型 (可选，'basic' 或 'pool'，默认为 'basic')
+    #[arg(long, default_value = "basic", value_parser = parse_client_type)]
+    pub client_type: winter_paintboard_sdk::ClientType,
+}
+
+fn parse_client_type(s: &str) -> Result<winter_paintboard_sdk::ClientType, String> {
+    match s.to_lowercase().as_str() {
+        "pool" | "connection_pool" => Ok(winter_paintboard_sdk::ClientType::ConnectionPool),
+        "basic" => Ok(winter_paintboard_sdk::ClientType::Basic),
+        _ => Err(format!("Invalid client type: {}", s)),
+    }
 }

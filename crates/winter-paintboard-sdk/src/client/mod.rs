@@ -1,10 +1,16 @@
 mod http_client;
 mod ws_client;
 mod batch_client;
+mod paintboard_client_trait;
+mod connection_pool;
+mod factory;
 
 pub use http_client::HttpClient;
 pub use ws_client::WsClient;
 pub use batch_client::BatchClient;
+pub use paintboard_client_trait::PaintboardClientTrait;
+pub use connection_pool::ConnectionPoolClient;
+pub use factory::{ClientType, create_client_by_type};
 
 use crate::{
     error::PaintboardError, 
@@ -12,6 +18,8 @@ use crate::{
     config::Config
 };
 use std::sync::Arc;
+
+use async_trait::async_trait;
 
 /// Main client for interacting with the Winter Paintboard API
 pub struct PaintboardClient {
@@ -24,7 +32,7 @@ pub struct PaintboardClient {
 
 impl PaintboardClient {
     /// Create a new PaintboardClient with the given configuration
-    pub async fn new(config: Config) -> Result<Self, PaintboardError> {
+    pub async fn new_impl(config: Config) -> Result<Self, PaintboardError> {
         let config = Arc::new(config);
         let http_client = HttpClient::new(config.clone())?;
         
@@ -38,23 +46,23 @@ impl PaintboardClient {
     }
 
     /// Set the authentication credentials (UID and token)
-    pub fn set_auth(&mut self, uid: u32, token: String) {
+    pub fn set_auth_impl(&mut self, uid: u32, token: String) {
         self.uid = Some(uid);
         self.token = Some(token);
     }
 
     /// Get the current board data
-    pub async fn get_board(&self) -> Result<Board, PaintboardError> {
+    pub async fn get_board_impl(&self) -> Result<Board, PaintboardError> {
         self.http_client.get_board().await
     }
 
     /// Get a token using UID and access key
-    pub async fn get_token(&self, uid: u32, access_key: &str) -> Result<String, PaintboardError> {
+    pub async fn get_token_impl(&self, uid: u32, access_key: &str) -> Result<String, PaintboardError> {
         self.http_client.get_token(uid, access_key).await
     }
 
     /// Paint a pixel at the given position with the specified color
-    pub async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<crate::models::PaintResult, PaintboardError> {
+    pub async fn paint_impl(&mut self, pos: Pos, color: Rgb) -> Result<crate::models::PaintResult, PaintboardError> {
         // Initialize WebSocket client if not already created
         if self.ws_client.is_none() {
             let mut ws_client = WsClient::new(self.config.clone()).await?;
@@ -77,7 +85,7 @@ impl PaintboardClient {
     }
 
     /// Paint multiple pixels at once using batch operation (sticky packet, no response waiting)
-    pub async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
+    pub async fn paint_batch_impl(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
         // Initialize WebSocket client if not already created
         if self.ws_client.is_none() {
             let mut ws_client = WsClient::new(self.config.clone()).await?;
@@ -97,5 +105,35 @@ impl PaintboardClient {
             // This should not happen, but added for safety
             Err(PaintboardError::ClientNotInitialized)
         }
+    }
+}
+
+#[async_trait]
+impl PaintboardClientTrait for PaintboardClient {
+    async fn new(config: Config) -> Result<Self, PaintboardError> 
+    where 
+        Self: Sized 
+    {
+        Self::new_impl(config).await
+    }
+
+    fn set_auth(&mut self, uid: u32, token: String) {
+        self.set_auth_impl(uid, token);
+    }
+
+    async fn get_board(&self) -> Result<Board, PaintboardError> {
+        self.get_board_impl().await
+    }
+
+    async fn get_token(&self, uid: u32, access_key: &str) -> Result<String, PaintboardError> {
+        self.get_token_impl(uid, access_key).await
+    }
+
+    async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<crate::models::PaintResult, PaintboardError> {
+        self.paint_impl(pos, color).await
+    }
+
+    async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
+        self.paint_batch_impl(operations).await
     }
 }

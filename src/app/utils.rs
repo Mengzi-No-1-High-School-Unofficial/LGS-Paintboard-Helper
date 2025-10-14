@@ -1,5 +1,5 @@
 use log::info;
-use winter_paintboard_sdk::{PaintboardClient, config::Config};
+use winter_paintboard_sdk::{PaintboardClient, PaintboardClientTrait, config::Config};
 
 /// Gets a token using UID and access key
 pub async fn get_token_with_access_key(

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 use tokio::time::{interval, Duration};
 use winter_paintboard_sdk::event::Event;
+use winter_paintboard_sdk::{PaintboardClient, PaintboardClientTrait};
 use winter_paintboard_sdk::models::{Board, Pos, Rgb};
 
 // 像素状态，区分来源和时间戳
@@ -214,7 +215,7 @@ impl BoardSyncManager {
     /// 开始全量同步循环
     pub async fn start_sync_loop(
         &self,
-        mut client: winter_paintboard_sdk::PaintboardClient,
+        mut client: Box<dyn winter_paintboard_sdk::PaintboardClientTrait + Send>,
         sync_interval: Duration,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let local_board = self.local_board.clone();

@@ -2,14 +2,14 @@ use log::{info, error, warn, debug};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration, sleep};
-use winter_paintboard_sdk::{PaintboardClient, Pos, Rgb};
+use winter_paintboard_sdk::{PaintboardClient, PaintboardClientTrait, Pos, Rgb};
 use crate::app::image_processing::ProcessedImageData;
 use crate::app::drawing::{create_client, ProgressiveMode};
 use crate::app::board_sync::{LocalBoard, BoardSyncManager};
 
 /// 增量修改管理器
 pub struct IncrementalManager {
-    client: Arc<Mutex<PaintboardClient>>,
+    client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
     local_board: Arc<Mutex<LocalBoard>>,
     target_image_data: ProcessedImageData,
     start_x: i32,
@@ -22,7 +22,7 @@ pub struct IncrementalManager {
 impl IncrementalManager {
     /// 创建新的增量管理器
     pub fn new(
-        client: PaintboardClient,
+        client: Box<dyn PaintboardClientTrait + Send>,
         local_board: Arc<Mutex<LocalBoard>>,
         target_image_data: ProcessedImageData,
         start_x: i32,
@@ -53,7 +53,7 @@ impl IncrementalManager {
             
             // 使用批量模式进行初始绘制，参数使用传入的值
             crate::app::drawing::draw_image_to_paintboard_with_client(
-                &mut client,
+                client.as_mut(),
                 &self.target_image_data,
                 &crate::app::drawing::ProgressiveMode::None, // 使用普通模式
                 self.max_batch_size, // 使用传入的批量大小
@@ -68,7 +68,7 @@ impl IncrementalManager {
 
     /// 开始监控并增量修改
     pub async fn start_monitoring(
-        client: Arc<Mutex<PaintboardClient>>,
+        client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
         local_board: Arc<Mutex<LocalBoard>>,
         target_image_data: ProcessedImageData,
         start_x: i32,
@@ -104,7 +104,7 @@ impl IncrementalManager {
 
     /// 比较本地绘版与目标图片，并恢复被修改的像素
     async fn compare_and_restore(
-        client: &Arc<Mutex<PaintboardClient>>,
+        client: &Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
         local_board: &Arc<Mutex<LocalBoard>>,
         target_image_data: &ProcessedImageData,
         start_x: i32,
@@ -197,7 +197,7 @@ impl IncrementalManager {
                     sleep(delay).await;
                     
                     let mut client_lock = client_clone.lock().await;
-                    match client_lock.paint_batch(chunk_vec).await {
+                    match client_lock.as_mut().paint_batch(chunk_vec).await {
                         Ok(()) => debug!("成功恢复像素批次，包含 {} 个像素", chunk_len),
                         Err(e) => error!("批量恢复像素失败: {:?}", e),
                     }
@@ -252,7 +252,7 @@ pub async fn start_incremental_if_enabled(
         
         // 初始化绘版客户端
         let config = winter_paintboard_sdk::config::Config::default();
-        let mut client = create_client(config).await?;
+        let mut client = create_client(config, winter_paintboard_sdk::ClientType::Basic).await?; // 使用基础客户端，因为增量模式有自己的管理逻辑
         
         // 设置认证信息
         client.set_auth(cli_uid, cli_token.unwrap_or_default().to_string());
