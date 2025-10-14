@@ -4,6 +4,7 @@ pub mod drawing;
 pub mod utils;
 pub mod board_sync;
 pub mod export;
+pub mod incremental;
 
 use log::{info, error};
 use tokio::time::Duration;
@@ -16,6 +17,7 @@ use crate::app::{
     utils::{get_token_with_access_key, validate_auth_args},
     board_sync::{BoardSyncManager, LocalBoard},
     export::start_export_if_enabled,
+    incremental::start_incremental_if_enabled,
 };
 
 /// Main application logic for drawing an image to the paintboard
@@ -87,6 +89,41 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             cli.export_dir,
             cli.export_interval,
         ).await?;
+        
+        // 启动增量修改模式（如果启用）
+        if cli.incremental_mode {
+            // 在增量模式下，我们先预处理图像数据
+            info!("正在预处理图片数据...");
+            let processed_image_data = process_image_at_all_scales(
+                &cli.image,
+                cli.width,
+                cli.height,
+                cli.x,
+                cli.y,
+            )?;
+            
+            start_incremental_if_enabled(
+                Some(token.clone()), // 传递token
+                cli.uid,
+                cli.ws_url.clone(),
+                &sync_manager,
+                cli.incremental_mode,
+                &processed_image_data,
+                cli.x,
+                cli.y,
+                cli.monitor_interval,
+                cli.restore_delay,
+                cli.max_batch_size, // 传递批处理大小参数
+            ).await?;
+            
+            // 在增量模式下，我们不再执行常规的绘图流程
+            // 而是保持程序运行以持续监控和修复
+            info!("增量修改模式已启动，程序将持续运行以监控和修复绘版...");
+            // 保持程序运行
+            tokio::signal::ctrl_c().await.expect("等待信号处理失败");
+            info!("接收到中断信号，正在退出...");
+            return Ok(());
+        }
     }
 
     // 在 run_app 函数内部进行图像预处理，这样在循环模式下只需处理一次
