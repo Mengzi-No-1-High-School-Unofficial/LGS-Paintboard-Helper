@@ -9,7 +9,7 @@ pub use http_client::HttpClient;
 pub use ws_client::WsClient;
 pub use batch_client::BatchClient;
 pub use paintboard_client_trait::PaintboardClientTrait;
-pub use connection_pool::ConnectionPoolClient;
+pub use connection_pool::{ConnectionPoolClient, PoolMetrics, start_monitoring_task};
 pub use factory::{ClientType, create_client_by_type};
 
 use crate::{
