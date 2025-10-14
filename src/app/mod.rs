@@ -2,6 +2,7 @@ pub mod cli;
 pub mod image_processing;
 pub mod drawing;
 pub mod utils;
+pub mod board_sync;
 
 use log::{info, error};
 use tokio::time::Duration;
@@ -12,6 +13,7 @@ use crate::app::{
     image_processing::{process_image_at_all_scales, ProcessedImageData},
     drawing::{draw_image_to_paintboard, ProgressiveMode, create_client},
     utils::{get_token_with_access_key, validate_auth_args},
+    board_sync::{BoardSyncManager, LocalBoard},
 };
 
 /// Main application logic for drawing an image to the paintboard
@@ -49,6 +51,33 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // Determine progressive mode
     let progressive_mode = ProgressiveMode::from_string(&cli.progressive);
+
+    // 检查是否启用本地同步
+    if cli.enable_local_sync {
+        info!("启用本地绘版数据同步，同步间隔: {} 秒", cli.sync_interval);
+        
+        // 获取EventBus实例
+        let event_bus = winter_paintboard_sdk::event::EventBus::global();
+        
+        // 创建同步管理器
+        let sync_manager = BoardSyncManager::new(&event_bus);
+        
+        // 为同步任务创建新的客户端
+        let sync_config = Config::default();
+        let mut sync_client = create_client(sync_config).await?;
+        sync_client.set_auth(cli.uid, token.to_string());
+        
+        // 启动全量同步循环
+        sync_manager.start_sync_loop(
+            sync_client,
+            Duration::from_secs(cli.sync_interval)
+        ).await?;
+        
+        // 启动事件监听（增量更新）
+        sync_manager.start_event_listener().await?;
+        
+        info!("本地绘版数据同步已启动");
+    }
 
     // 在 run_app 函数内部进行图像预处理，这样在循环模式下只需处理一次
     info!("正在预处理图片数据...");
