@@ -141,12 +141,13 @@ impl IncrementalManager {
                relative_y < target_image_data.img_height as i32 {
                 
                 // 检查本地绘版上的对应像素是否与目标颜色一致
-                if let Some(current_color) = local_pixels.get(&(pos.x, pos.y)) {
-                    if current_color != target_color {
-                        debug!("检测到像素变化: ({}, {}) 从 ({}, {}, {}) 变为 ({}, {}, {})",
+                if let Some(current_pixel_status) = local_pixels.get(&(pos.x, pos.y)) {
+                    // 检查实际颜色是否与目标颜色一致，不区分来源
+                    if current_pixel_status.color != *target_color {
+                        debug!("检测到像素变化: ({}, {}) 期望颜色 ({}, {}, {}) 实际颜色 ({}, {}, {})",
                                pos.x, pos.y,
                                target_color.r, target_color.g, target_color.b,
-                               current_color.r, current_color.g, current_color.b);
+                               current_pixel_status.color.r, current_pixel_status.color.g, current_pixel_status.color.b);
                         pixels_to_restore.push((*pos, *target_color));
                     }
                 } else {
