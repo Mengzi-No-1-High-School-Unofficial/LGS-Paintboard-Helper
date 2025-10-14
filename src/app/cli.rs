@@ -83,4 +83,16 @@ pub struct Cli {
     /// 图片导出目录 (可选，默认为当前目录下的exports文件夹)
     #[arg(long, default_value = "exports")]
     pub export_dir: String,
+
+    /// 是否启用增量修改模式 (可选，默认为禁用)
+    #[arg(long, default_value_t = false)]
+    pub incremental_mode: bool,
+
+    /// 监控间隔时间（毫秒）(可选，默认为5000毫秒)
+    #[arg(long, default_value_t = 5000)]
+    pub monitor_interval: u64,
+
+    /// 恢复像素时的延迟（毫秒）(可选，默认为10毫秒)
+    #[arg(long, default_value_t = 10)]
+    pub restore_delay: u64,
 }
