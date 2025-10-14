@@ -63,4 +63,12 @@ pub struct Cli {
     /// 渐进式绘制模式 (可选，'none', 'chessboard', 'scale')
     #[arg(long, default_value = "none")]
     pub progressive: String,
+
+    /// 是否启用本地绘版数据同步 (可选，默认为禁用)
+    #[arg(long, default_value_t = false)]
+    pub enable_local_sync: bool,
+
+    /// 本地绘版数据同步间隔（秒）(可选，默认为300秒，即5分钟)
+    #[arg(long, default_value_t = 300)]
+    pub sync_interval: u64,
 }

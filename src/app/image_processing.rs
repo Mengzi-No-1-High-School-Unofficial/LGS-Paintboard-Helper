@@ -1,5 +1,5 @@
 use image::{open, RgbaImage, imageops::FilterType};
-use log::{info, warn};
+use log::{debug, info, warn};
 
 /// Represents processed image data for different scale factors
 #[derive(Clone)]
@@ -102,7 +102,7 @@ fn prepare_draw_operations_with_coords(
 
         // 将坐标转换为有效的u16值（0-999 for x, 0-599 for y） 
         if board_x >= 1000 || board_y >= 600 {
-            warn!("坐标({}, {})超出了画板边界，将被忽略", board_x, board_y);
+            debug!("坐标({}, {})超出了画板边界，将被忽略", board_x, board_y);
             continue;
         }
         
