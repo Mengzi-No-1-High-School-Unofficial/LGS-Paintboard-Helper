@@ -22,6 +22,8 @@ pub struct WsClient {
     response_channels: Arc<TokioMutex<HashMap<u64, oneshot::Sender<PaintResult>>>>,
     // Background task handle for message processing
     message_task_handle: Option<tokio::task::JoinHandle<()>>,
+    // Flag to control reconnection attempts
+    should_reconnect: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl WsClient {
@@ -34,6 +36,7 @@ impl WsClient {
             token: None,
             response_channels: Arc::new(TokioMutex::new(HashMap::new())),
             message_task_handle: None,
+            should_reconnect: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
     }
 
@@ -60,6 +63,11 @@ impl WsClient {
                 let mut conn_guard = self.connection.lock().await;
                 *conn_guard = Some(ws_stream);
                 drop(conn_guard); // Release the lock so we can call start_message_processing_task
+                
+                // Cancel the previous message processing task if it exists
+                if let Some(handle) = self.message_task_handle.take() {
+                    handle.abort();
+                }
                 
                 // Start the message processing task
                 self.start_message_processing_task().await;
@@ -95,170 +103,238 @@ impl WsClient {
         
         let connection_clone = self.connection.clone();
         let response_channels_clone = self.response_channels.clone();
+        let should_reconnect = self.should_reconnect.clone();
+        let config = self.config.clone();
+        let _uid = self.uid;  // Keep for reconnection with auth
+        let _token = self.token.clone();  // Keep for reconnection with auth
         
         self.message_task_handle = Some(tokio::spawn(async move {
             log::debug!("消息处理任务开始运行");
-            // Create a loop to continuously process messages
-            let mut last_heartbeat_time = std::time::Instant::now();
+            // Track the reconnection attempts with exponential backoff
+            let mut reconnect_delay = tokio::time::Duration::from_secs(1);
+            let max_reconnect_delay = tokio::time::Duration::from_secs(60);
+            
             loop {
-                let mut conn_guard = connection_clone.lock().await;
+                let mut last_heartbeat_time = std::time::Instant::now();
                 
-                if let Some(ref mut ws_stream) = *conn_guard {
-                    match ws_stream.next().await {
-                        Some(Ok(message)) => {
-                            last_heartbeat_time = std::time::Instant::now(); // 更新最后收到消息的时间
-                            drop(conn_guard); // Release the lock before processing
-                            match message {
-                                Message::Binary(data) => {
-                                    trace!("收到二进制消息，长度: {}", data.len());
-                                    // Parse the binary message
-                                    if let Ok(protocol_msg) = ProtocolMessage::parse(&data) {
-                                        match protocol_msg {
-                                            ProtocolMessage::HeartbeatPing => {
-                                                trace!("收到服务器心跳 PING");
-                                                // 发送心跳事件到事件总线
-                                                let event_bus = EventBus::global();
-                                                let _ = event_bus.send(Event::HeartbeatEvent);
-                                                
-                                                // Respond to heartbeat ping
-                                                let pong_msg = vec![OpCode::HeartbeatPong as u8];
-                                                trace!("发送心跳 PONG 响应");
-                                                let mut send_conn_guard = connection_clone.lock().await;
-                                                if let Some(ref mut ws_stream) = *send_conn_guard {
-                                                    match ws_stream.send(Message::Binary(pong_msg)).await {
-                                                        Ok(_) => {
-                                                            trace!("心跳 PONG 发送成功");
-                                                        }
-                                                        Err(e) => {
-                                                            error!("心跳 PONG 发送失败: {}", e);
-                                                            
-                                                            // 发送错误事件到事件总线
-                                                            let event_bus = EventBus::global();
-                                                            let _ = event_bus.send(Event::error_event(format!("Heartbeat PONG send failed: {}", e)));
+                loop {
+                    let mut conn_guard = connection_clone.lock().await;
+                    
+                    if let Some(ref mut ws_stream) = *conn_guard {
+                        match ws_stream.next().await {
+                            Some(Ok(message)) => {
+                                last_heartbeat_time = std::time::Instant::now(); // 更新最后收到消息的时间
+                                drop(conn_guard); // Release the lock before processing
+                                match message {
+                                    Message::Binary(data) => {
+                                        trace!("收到二进制消息，长度: {}", data.len());
+                                        // Parse the binary message
+                                        if let Ok(protocol_msg) = ProtocolMessage::parse(&data) {
+                                            match protocol_msg {
+                                                ProtocolMessage::HeartbeatPing => {
+                                                    trace!("收到服务器心跳 PING");
+                                                    // 发送心跳事件到事件总线
+                                                    let event_bus = EventBus::global();
+                                                    let _ = event_bus.send(Event::HeartbeatEvent);
+                                                    
+                                                    // Respond to heartbeat ping
+                                                    let pong_msg = vec![OpCode::HeartbeatPong as u8];
+                                                    trace!("发送心跳 PONG 响应");
+                                                    let mut send_conn_guard = connection_clone.lock().await;
+                                                    if let Some(ref mut ws_stream) = *send_conn_guard {
+                                                        match ws_stream.send(Message::Binary(pong_msg)).await {
+                                                            Ok(_) => {
+                                                                trace!("心跳 PONG 发送成功");
+                                                            }
+                                                            Err(e) => {
+                                                                error!("心跳 PONG 发送失败: {}", e);
+                                                                
+                                                                // 发送错误事件到事件总线
+                                                                let event_bus = EventBus::global();
+                                                                let _ = event_bus.send(Event::error_event(format!("Heartbeat PONG send failed: {}", e)));
+                                                            }
                                                         }
                                                     }
-                                                }
-                                            },
-                                            ProtocolMessage::PaintResult { drawing_id, status } => {
-                                                trace!("收到绘图结果，drawing_id: {}, status: {}", drawing_id, status);
-                                                // Find the matching pending request based on drawing_id
-                                                // For now, send to the first available channel as a workaround
-                                                // In a complete implementation, we'd need to maintain a mapping between
-                                                // the paint_id we sent and the drawing_id received back from the server
-                                                let mut channels_guard = response_channels_clone.lock().await;
-                                                // Take the first key
-                                                let first_key = channels_guard.keys().next().cloned();
-                                                if let Some(key) = first_key {
-                                                    // Remove the key-value pair from the map
-                                                    if let Some(tx) = channels_guard.remove(&key) {
-                                                        let paint_result = PaintResult {
-                                                            drawing_id,
-                                                            status: PaintStatus::from(status),
-                                                            message: format!("Paint result received with status: {}", status),
-                                                        };
-                                                        drop(channels_guard); // Release the lock before sending
-                                                        trace!("发送 PaintResult 到响应通道");
-                                                        let _ = tx.send(paint_result);
-                                                        trace!("PaintResult 已发送");
+                                                },
+                                                ProtocolMessage::PaintResult { drawing_id, status } => {
+                                                    trace!("收到绘图结果，drawing_id: {}, status: {}", drawing_id, status);
+                                                    // Find the matching pending request based on drawing_id
+                                                    // For now, send to the first available channel as a workaround
+                                                    // In a complete implementation, we'd need to maintain a mapping between
+                                                    // the paint_id we sent and the drawing_id received back from the server
+                                                    let mut channels_guard = response_channels_clone.lock().await;
+                                                    // Take the first key
+                                                    let first_key = channels_guard.keys().next().cloned();
+                                                    if let Some(key) = first_key {
+                                                        // Remove the key-value pair from the map
+                                                        if let Some(tx) = channels_guard.remove(&key) {
+                                                            let paint_result = PaintResult {
+                                                                drawing_id,
+                                                                status: PaintStatus::from(status),
+                                                                message: format!("Paint result received with status: {}", status),
+                                                            };
+                                                            drop(channels_guard); // Release the lock before sending
+                                                            trace!("发送 PaintResult 到响应通道");
+                                                            let _ = tx.send(paint_result);
+                                                            trace!("PaintResult 已发送");
+                                                        }
+                                                    } else {
+                                                        debug!("没有找到匹配的响应通道");
                                                     }
-                                                } else {
-                                                    debug!("没有找到匹配的响应通道");
+                                                },
+                                                ProtocolMessage::PaintEvent { pos, color } => {
+                                                    // Handle paint events (for read-only clients)
+                                                    debug!("Received paint event at ({}, {}) with color ({}, {}, {})", 
+                                                             pos.x, pos.y, color.r, color.g, color.b);
+                                                    // 发送绘图事件到事件总线（表示其他用户绘制了该像素）
+                                                    let event_bus = EventBus::global();
+                                                    let _ = event_bus.send(Event::other_paint_event(pos, color));
+                                                },
+                                                ProtocolMessage::Unknown { opcode, data } => {
+                                                    warn!("Received unknown message with opcode: {}, data length: {}", opcode, data.len());
+                                                },
+                                                _ => {
+                                                    trace!("收到其他协议消息: {:?}", protocol_msg);
                                                 }
-                                            },
-                                            ProtocolMessage::PaintEvent { pos, color } => {
-                                                // Handle paint events (for read-only clients)
-                                                debug!("Received paint event at ({}, {}) with color ({}, {}, {})", 
-                                                         pos.x, pos.y, color.r, color.g, color.b);
-                                                // 发送绘图事件到事件总线（表示其他用户绘制了该像素）
-                                                let event_bus = EventBus::global();
-                                                let _ = event_bus.send(Event::other_paint_event(pos, color));
-                                            },
-                                            ProtocolMessage::Unknown { opcode, data } => {
-                                                warn!("Received unknown message with opcode: {}, data length: {}", opcode, data.len());
-                                            },
-                                            _ => {
-                                                trace!("收到其他协议消息: {:?}", protocol_msg);
                                             }
+                                        } else {
+                                            debug!("无法解析二进制消息: {:?}", &data[..std::cmp::min(10, data.len())]);
+                                            
+                                            // 发送错误事件到事件总线
+                                            let event_bus = EventBus::global();
+                                            let _ = event_bus.send(Event::error_event(format!("Failed to parse binary message: {:?}", &data[..std::cmp::min(10, data.len())])));
                                         }
-                                    } else {
-                                        debug!("无法解析二进制消息: {:?}", &data[..std::cmp::min(10, data.len())]);
+                                    },
+                                    Message::Close(close_frame) => {
+                                        // Connection closed by server
+                                        info!("WebSocket 连接被服务器关闭: {:?}", close_frame);
+                                        
+                                        // 发送连接关闭事件到事件总线
+                                        let event_bus = EventBus::global();
+                                        let _ = event_bus.send(Event::ConnectionClosed);
+                                        
+                                        break; // Break the inner loop to attempt reconnection
+                                    },
+                                    Message::Text(text) => {
+                                        warn!("收到意外的文本消息: {}", text);
                                         
                                         // 发送错误事件到事件总线
                                         let event_bus = EventBus::global();
-                                        let _ = event_bus.send(Event::error_event(format!("Failed to parse binary message: {:?}", &data[..std::cmp::min(10, data.len())])));
+                                        let _ = event_bus.send(Event::error_event(format!("Received unexpected text message: {}", text)));
+                                    },
+                                    Message::Ping(_) => {
+                                        trace!("收到 WebSocket ping");
+                                        // Respond to ping with pong
+                                        let mut send_conn_guard = connection_clone.lock().await;
+                                        if let Some(ref mut ws_stream) = *send_conn_guard {
+                                            let _ = ws_stream.send(Message::Pong(vec![])).await;
+                                            trace!("发送 WebSocket pong 响应");
+                                        }
+                                    },
+                                    Message::Pong(_) => {
+                                        trace!("收到 WebSocket pong");
+                                    },
+                                    _ => {
+                                        trace!("收到其他类型的消息");
                                     }
-                                },
-                                Message::Close(close_frame) => {
-                                    // Connection closed by server
-                                    info!("WebSocket 连接被服务器关闭: {:?}", close_frame);
-                                    
-                                    // 发送连接关闭事件到事件总线
-                                    let event_bus = EventBus::global();
-                                    let _ = event_bus.send(Event::ConnectionClosed);
-                                    
-                                    break;
-                                },
-                                Message::Text(text) => {
-                                    warn!("收到意外的文本消息: {}", text);
-                                    
-                                    // 发送错误事件到事件总线
-                                    let event_bus = EventBus::global();
-                                    let _ = event_bus.send(Event::error_event(format!("Received unexpected text message: {}", text)));
-                                },
-                                Message::Ping(_) => {
-                                    trace!("收到 WebSocket ping");
-                                    // Respond to ping with pong
-                                    let mut send_conn_guard = connection_clone.lock().await;
-                                    if let Some(ref mut ws_stream) = *send_conn_guard {
-                                        let _ = ws_stream.send(Message::Pong(vec![])).await;
-                                        trace!("发送 WebSocket pong 响应");
-                                    }
-                                },
-                                Message::Pong(_) => {
-                                    trace!("收到 WebSocket pong");
-                                },
-                                _ => {
-                                    trace!("收到其他类型的消息");
                                 }
+                            },
+                            Some(Err(e)) => {
+                                drop(conn_guard);
+                                error!("WebSocket 错误: {}", e);
+                                
+                                // 发送错误事件到事件总线
+                                let event_bus = EventBus::global();
+                                let _ = event_bus.send(Event::error_event(format!("WebSocket error: {}", e)));
+                                
+                                break; // Break the inner loop to attempt reconnection
+                            },
+                            None => {
+                                drop(conn_guard);
+                                // Connection closed
+                                debug!("WebSocket 连接关闭 (None received)");
+                                
+                                // 发送连接关闭事件到事件总线
+                                let event_bus = EventBus::global();
+                                let _ = event_bus.send(Event::ConnectionClosed);
+                                
+                                break; // Break the inner loop to attempt reconnection
                             }
-                        },
-                        Some(Err(e)) => {
-                            drop(conn_guard);
-                            error!("WebSocket 错误: {}", e);
-                            
-                            // 发送错误事件到事件总线
-                            let event_bus = EventBus::global();
-                            let _ = event_bus.send(Event::error_event(format!("WebSocket error: {}", e)));
-                            
-                            break;
-                        },
-                        None => {
-                            drop(conn_guard);
-                            // Connection closed
-                            debug!("WebSocket 连接关闭 (None received)");
+                        }
+                    } else {
+                        drop(conn_guard);
+                        // Check if connection has been inactive for too long
+                        if last_heartbeat_time.elapsed() > std::time::Duration::from_secs(60) {
+                            warn!("连接长时间无活动，可能已断开");
                             
                             // 发送连接关闭事件到事件总线
                             let event_bus = EventBus::global();
                             let _ = event_bus.send(Event::ConnectionClosed);
                             
-                            break;
+                            break; // Break the inner loop to attempt reconnection
+                        }
+                        // Wait a bit before trying to process again
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    }
+                }
+                
+                // Check if we should continue trying to reconnect
+                if !should_reconnect.load(std::sync::atomic::Ordering::Relaxed) {
+                    debug!("收到停止重连信号，退出消息处理任务");
+                    break;
+                }
+                
+                // 发送连接断开事件到事件总线
+                let event_bus = EventBus::global();
+                let _ = event_bus.send(Event::ConnectionClosed);
+                
+                info!("尝试重新连接到 WebSocket 服务器...");
+                
+                // Wait before attempting to reconnect (exponential backoff)
+                tokio::time::sleep(reconnect_delay).await;
+                
+                // Update the reconnect delay for next time (exponential backoff), but cap it
+                reconnect_delay = std::cmp::min(reconnect_delay * 2, max_reconnect_delay);
+                
+                // Try to reconnect
+                // Note: This is simplified - in a real implementation, we'd need to handle reconnection differently
+                // because the connection is typically owned by the WsClient instance.
+                // Here we'll just signal that we need to reconnect through the event bus or by returning.
+                
+                // We'll try to establish a new connection here
+                match Url::parse(&config.ws_url) {
+                    Ok(url) => {
+                        match connect_async(url).await {
+                            Ok((ws_stream, _)) => {
+                                debug!("WebSocket 重连成功");
+                                
+                                // Store the new connection
+                                let mut conn_guard = connection_clone.lock().await;
+                                *conn_guard = Some(ws_stream);
+                                drop(conn_guard);
+                                
+                                // Reset the reconnection delay after successful connection
+                                reconnect_delay = tokio::time::Duration::from_secs(1);
+                                
+                                // 发送连接打开事件到事件总线
+                                let event_bus = EventBus::global();
+                                let _ = event_bus.send(Event::ConnectionOpened);
+                                
+                                // We successfully reconnected, continue with the outer loop
+                                continue;
+                            }
+                            Err(e) => {
+                                error!("WebSocket 重连失败: {}, 将在 {:?} 后重试", e, reconnect_delay);
+                            }
                         }
                     }
-                } else {
-                    drop(conn_guard);
-                    // Check if connection has been inactive for too long
-                    if last_heartbeat_time.elapsed() > std::time::Duration::from_secs(60) {
-                        warn!("连接长时间无活动，可能已断开");
-                        
-                        // 发送连接关闭事件到事件总线
-                        let event_bus = EventBus::global();
-                        let _ = event_bus.send(Event::ConnectionClosed);
-                        
-                        break;
+                    Err(e) => {
+                        error!("WebSocket URL 解析失败: {}", e);
                     }
-                    // Wait a bit before trying to process again
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
+                
+                // If we reach here, it means reconnection attempt failed.
+                // We'll continue to the next iteration which will try again after the delay.
             }
             debug!("消息处理任务结束");
         }));
@@ -521,6 +597,9 @@ impl WsClient {
 
     /// Properly disconnect and clean up the WebSocket connection
     pub async fn disconnect(&mut self) -> Result<(), PaintboardError> {
+        // Set the reconnection flag to false to prevent reconnection attempts
+        self.should_reconnect.store(false, std::sync::atomic::Ordering::Relaxed);
+        
         if let Some(handle) = self.message_task_handle.take() {
             handle.abort();
         }
