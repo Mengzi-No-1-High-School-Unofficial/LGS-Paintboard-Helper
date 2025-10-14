@@ -1,6 +1,6 @@
 use log::{debug, error, info, warn};
 use tokio::time::Duration;
-use winter_paintboard_sdk::{PaintboardClient, config::Config};
+use winter_paintboard_sdk::{PaintboardClient, PaintboardClientTrait, config::Config, ClientType, create_client_by_type};
 
 use crate::app::image_processing::ProcessedImageData;
 
@@ -42,7 +42,7 @@ pub async fn draw_image_to_paintboard(
 
 /// Draws an image to the paintboard using various modes with processed image data
 pub async fn draw_image_to_paintboard_with_client(
-    client: &mut PaintboardClient,
+    client: &mut dyn PaintboardClientTrait,
     processed_image_data: &ProcessedImageData,
     progressive_mode: &ProgressiveMode,
     max_batch_size: usize,
@@ -253,7 +253,9 @@ pub async fn draw_image_to_paintboard_with_client(
     Ok(())
 }
 
-/// Creates a new paintboard client with the given config
-pub async fn create_client(config: Config) -> Result<PaintboardClient, Box<dyn std::error::Error>> {
-    Ok(PaintboardClient::new(config).await?)
+
+
+/// Creates a new paintboard client with the given config and client type
+pub async fn create_client(config: Config, client_type: ClientType) -> Result<Box<dyn PaintboardClientTrait + Send>, Box<dyn std::error::Error>> {
+    Ok(create_client_by_type(config, client_type).await?)
 }

@@ -8,7 +8,7 @@ pub mod incremental;
 
 use log::{info, error};
 use tokio::time::Duration;
-use winter_paintboard_sdk::config::Config;
+use winter_paintboard_sdk::{config::Config, PaintboardClientTrait};
 
 use crate::app::{
     cli::Cli,
@@ -48,10 +48,10 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::default(); // 使用默认配置
     // 确保使用正确的WebSocket端点
     config.ws_url = cli.ws_url.clone().unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
-    let mut client = create_client(config).await?; // 使用新的API
+    let mut client = create_client(config, cli.client_type).await?; // 使用新的API和客户端类型
     
     // 设置认证信息
-    client.set_auth(cli.uid, token.to_string());
+    client.as_mut().set_auth(cli.uid, token.to_string());
 
     // Determine progressive mode
     let progressive_mode = ProgressiveMode::from_string(&cli.progressive);
@@ -68,8 +68,8 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         
         // 为同步任务创建新的客户端
         let sync_config = Config::default();
-        let mut sync_client = create_client(sync_config).await?;
-        sync_client.set_auth(cli.uid, token.to_string());
+        let mut sync_client = create_client(sync_config, cli.client_type).await?;
+        sync_client.as_mut().set_auth(cli.uid, token.to_string());
         
         // 启动全量同步循环
         sync_manager.start_sync_loop(
@@ -142,7 +142,7 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         loop {
             // 在循环内部使用已预处理的数据，避免重复预处理
             if let Err(e) = crate::app::drawing::draw_image_to_paintboard_with_client(
-                &mut client,
+                client.as_mut(),
                 &processed_image_data,
                 &progressive_mode,
                 cli.max_batch_size,
@@ -158,7 +158,7 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         // Single draw mode - 使用已预处理的数据
         crate::app::drawing::draw_image_to_paintboard_with_client(
-            &mut client,
+            client.as_mut(),
             &processed_image_data,
             &progressive_mode,
             cli.max_batch_size,
