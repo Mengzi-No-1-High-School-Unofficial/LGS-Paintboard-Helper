@@ -71,4 +71,16 @@ pub struct Cli {
     /// 本地绘版数据同步间隔（秒）(可选，默认为300秒，即5分钟)
     #[arg(long, default_value_t = 300)]
     pub sync_interval: u64,
+
+    /// 是否启用绘版图片导出功能 (可选，默认为禁用)
+    #[arg(long, default_value_t = false)]
+    pub enable_export: bool,
+
+    /// 图片导出间隔（秒）(可选，默认为600秒，即10分钟)
+    #[arg(long, default_value_t = 600)]
+    pub export_interval: u64,
+
+    /// 图片导出目录 (可选，默认为当前目录下的exports文件夹)
+    #[arg(long, default_value = "exports")]
+    pub export_dir: String,
 }

@@ -3,6 +3,7 @@ pub mod image_processing;
 pub mod drawing;
 pub mod utils;
 pub mod board_sync;
+pub mod export;
 
 use log::{info, error};
 use tokio::time::Duration;
@@ -14,6 +15,7 @@ use crate::app::{
     drawing::{draw_image_to_paintboard, ProgressiveMode, create_client},
     utils::{get_token_with_access_key, validate_auth_args},
     board_sync::{BoardSyncManager, LocalBoard},
+    export::start_export_if_enabled,
 };
 
 /// Main application logic for drawing an image to the paintboard
@@ -77,6 +79,14 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         sync_manager.start_event_listener().await?;
         
         info!("本地绘版数据同步已启动");
+        
+        // 启动绘版图片导出服务（如果启用）
+        start_export_if_enabled(
+            &sync_manager,
+            cli.enable_export,
+            cli.export_dir,
+            cli.export_interval,
+        ).await?;
     }
 
     // 在 run_app 函数内部进行图像预处理，这样在循环模式下只需处理一次
