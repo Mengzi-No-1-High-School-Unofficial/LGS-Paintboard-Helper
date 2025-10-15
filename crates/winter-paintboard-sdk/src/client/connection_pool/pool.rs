@@ -7,10 +7,11 @@ use crate::{
     PaintboardClientTrait,
 
     error::PaintboardError, 
-    models::{Rgb, Pos, PaintResult}, 
     config::Config,
     PaintboardClient,
 };
+
+
 
 // 连接池项，包含连接和元数据
 struct PoolItem {
@@ -33,7 +34,60 @@ impl PoolItem {
 
 use crate::client::connection_pool::pool_client::PoolMetrics;
 
+// 连接守卫，利用 RAII 自动管理连接生命周期
+pub struct ConnectionGuard {
+    connection: Option<PaintboardClient>,
+    pool: Arc<ConnectionPool>,
+    broken: bool,
+}
+
+impl ConnectionGuard {
+    pub fn new(connection: PaintboardClient, pool: Arc<ConnectionPool>) -> Self {
+        Self {
+            connection: Some(connection),
+            pool,
+            broken: false,
+        }
+    }
+    
+    pub fn mark_broken(&mut self) {
+        self.broken = true;
+    }
+    
+    pub fn as_mut(&mut self) -> Option<&mut PaintboardClient> {
+        self.connection.as_mut()
+    }
+    
+    // 执行操作并返回结果和是否损坏连接的指示
+    pub async fn execute_with_retry<F, Fut, T>(&mut self, operation: F) -> Result<T, PaintboardError>
+    where
+        F: Fn(&mut PaintboardClient) -> Fut,
+        Fut: std::future::Future<Output = Result<T, PaintboardError>>,
+    {
+        if let Some(client) = self.connection.as_mut() {
+            operation(client).await
+        } else {
+            Err(PaintboardError::ConnectionClosed)
+        }
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        // 如果连接存在，则归还到池中
+        if let Some(connection) = self.connection.take() {
+            // 在后台任务中异步归还连接
+            let pool = self.pool.clone();
+            let broken = self.broken;
+            tokio::spawn(async move {
+                pool.release(connection, broken).await;
+            });
+        }
+    }
+}
+
 // 连接池管理器
+#[derive(Clone)]
 pub struct ConnectionPool {
     pub pool: Arc<Mutex<VecDeque<PoolItem>>>,
     pub semaphore: Arc<Semaphore>,
@@ -194,6 +248,69 @@ impl ConnectionPool {
         update_fn(&mut metrics);
     }
     
+    /// 使用连接执行操作，自动管理连接生命周期和重试逻辑
+    pub async fn execute_with_connection<T, F>(&self, operation: F) -> Result<T, PaintboardError>
+    where
+        F: Clone,  // 添加 Clone 约束
+        F: FnOnce(&mut PaintboardClient) -> Result<T, PaintboardError>,
+        T: Send,
+    {
+        let mut attempts = 0;
+        let max_attempts = 3;
+        
+        loop {
+            let client = self.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.clone()));
+            
+            match operation.clone()(guard.as_mut().unwrap()) {  // 使用 clone() 来获取每次迭代的副本
+                Ok(result) => {
+                    // 操作成功，连接保持完好，通过 Drop 自动归还
+                    return Ok(result);
+                }
+                Err(e) => {
+                    attempts += 1;
+                    guard.mark_broken(); // 标记连接已损坏
+                    if attempts >= max_attempts {
+                        return Err(e);
+                    }
+                    // 作用域结束时连接会被自动归还（并标记为损坏）
+                }
+            }
+        }
+    }
+    
+    /// 使用异步操作执行连接，支持异步闭包
+    pub async fn execute_with_connection_async<F, Fut, T>(&self, operation: F) -> Result<T, PaintboardError>
+    where
+        F: Clone,  // 添加 Clone 约束以支持循环中的多次使用
+        F: Fn(&mut PaintboardClient) -> Fut,
+        Fut: std::future::Future<Output = Result<T, PaintboardError>> + Send + 'static,
+        T: Send + 'static,
+    {
+        let mut attempts = 0;
+        let max_attempts = 3;
+        
+        loop {
+            let client = self.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.clone())); // 修复: 使用 Arc::new()
+            
+            match operation(guard.as_mut().unwrap()).await {
+                Ok(result) => {
+                    // 操作成功，连接保持完好，通过 Drop 自动归还
+                    return Ok(result);
+                }
+                Err(e) => {
+                    attempts += 1;
+                    guard.mark_broken(); // 标记连接已损坏
+                    if attempts >= max_attempts {
+                        return Err(e);
+                    }
+                    // 作用域结束时连接会被自动归还（并标记为损坏）
+                }
+            }
+        }
+    }
+    
     // 增加请求计数
     pub async fn increment_requests(&self, packet_count: u64) {
         self.update_metrics(|m| {
@@ -287,3 +404,30 @@ where
         }
     }
 }
+
+// 定义一个重试宏，只处理重试逻辑，不管理连接
+// 用法: with_retry!(operation_code)
+// operation_code 应该是一个表达式或闭包，会重试最多3次
+#[macro_export]
+macro_rules! with_retry {
+    ($operation:expr) => {{
+        use crate::error::PaintboardError;
+        
+        let mut attempts = 0;
+        let max_attempts = 3;
+        
+        loop {
+            match $operation {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    attempts += 1;
+                    if attempts >= max_attempts {
+                        return Err(e);
+                    }
+                    // 继续下一次尝试
+                }
+            }
+        }
+    }};
+}
+

@@ -9,9 +9,10 @@ use crate::{
     config::Config,
     PaintboardClient,
     PaintboardClientTrait,
+    with_retry,  // 导入宏
 };
 
-use super::pool::ConnectionPool;
+use super::pool::{ConnectionPool, ConnectionGuard};
 
 // ConnectionPoolClient 实现
 pub struct ConnectionPoolClient {
@@ -60,42 +61,7 @@ impl ConnectionPoolClient {
     }
     
     // 内部方法：执行带故障转移的操作
-    async fn execute_with_fault_tolerance<T, F, Fut>(&self, operation: F) -> Result<T, PaintboardError>
-    where
-        F: Fn(&mut PaintboardClient) -> Fut,
-        Fut: std::future::Future<Output = Result<T, PaintboardError>>,
-    {
-        // 尝试最多3次
-        let mut attempts = 0;
-        let max_attempts = 3;
-        
-        loop {
-            let mut client = match self.pool.acquire().await {
-                Ok(client) => client,
-                Err(e) => return Err(e),
-            };
-            
-            match operation(&mut client).await {
-                Ok(result) => {
-                    // 操作成功，归还连接
-                    self.pool.release(client, false).await;
-                    return Ok(result);
-                }
-                Err(e) => {
-                    attempts += 1;
-                    if attempts >= max_attempts {
-                        // 已达到最大重试次数，归还损坏的连接
-                        self.pool.release(client, true).await;
-                        return Err(e);
-                    }
-                    
-                    // 连接可能已损坏，归还并标记为损坏
-                    self.pool.release(client, true).await;
-                    // 继续下一次尝试
-                }
-            }
-        }
-    }
+    // 现在使用 ConnectionPool 的 execute_with_connection 方法，不再需要这个
 }
 
 #[async_trait]
@@ -116,197 +82,54 @@ impl PaintboardClientTrait for ConnectionPoolClient {
         // 增加请求计数
         self.pool.increment_requests(1).await;
         
-        // 尝试最多3次
-        let mut attempts = 0;
-        let max_attempts = 3;
-        
-        loop {
-            let mut client = match self.pool.acquire().await {
-                Ok(client) => client,
-                Err(e) => {
-                    self.pool.increment_errors().await; // 记录错误
-                    return Err(e);
-                }
-            };
-            
-            match client.get_board().await {
-                Ok(result) => {
-                    // 操作成功，归还连接
-                    self.pool.release(client, false).await;
-                    
-                    // 如果重试过，记录重试成功
-                    if attempts > 0 {
-                        self.pool.increment_retry(true).await;
-                    }
-                    
-                    return Ok(result);
-                }
-                Err(e) => {
-                    attempts += 1;
-                    if attempts >= max_attempts {
-                        // 已达到最大重试次数，归还损坏的连接
-                        self.pool.release(client, true).await;
-                        self.pool.increment_errors().await; // 记录错误
-                        return Err(e);
-                    }
-                    
-                    // 记录重试
-                    self.pool.increment_retry(false).await;
-                    
-                    // 连接可能已损坏，归还并标记为损坏
-                    self.pool.release(client, true).await;
-                    // 继续下一次尝试
-                }
-            }
-        }
+        with_retry!({
+            let client = self.pool.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
+            let result = guard.as_mut().unwrap().get_board().await;
+            // ConnectionGuard 会在作用域结束时自动归还连接
+            result
+        })
     }
 
     async fn get_token(&self, uid: u32, access_key: &str) -> Result<String, PaintboardError> {
-        let access_key = access_key.to_string(); // 创建一个拥有所有权的字符串
         // 增加请求计数
         self.pool.increment_requests(1).await;
         
-        // 尝试最多3次
-        let mut attempts = 0;
-        let max_attempts = 3;
-        
-        loop {
-            let mut client = match self.pool.acquire().await {
-                Ok(client) => client,
-                Err(e) => {
-                    self.pool.increment_errors().await; // 记录错误
-                    return Err(e);
-                }
-            };
-            
-            match client.get_token(uid, &access_key).await {
-                Ok(result) => {
-                    // 操作成功，归还连接
-                    self.pool.release(client, false).await;
-                    
-                    // 如果重试过，记录重试成功
-                    if attempts > 0 {
-                        self.pool.increment_retry(true).await;
-                    }
-                    
-                    return Ok(result);
-                }
-                Err(e) => {
-                    attempts += 1;
-                    if attempts >= max_attempts {
-                        // 已达到最大重试次数，归还损坏的连接
-                        self.pool.release(client, true).await;
-                        self.pool.increment_errors().await; // 记录错误
-                        return Err(e);
-                    }
-                    
-                    // 记录重试
-                    self.pool.increment_retry(false).await;
-                    
-                    // 连接可能已损坏，归还并标记为损坏
-                    self.pool.release(client, true).await;
-                    // 继续下一次尝试
-                }
-            }
-        }
+        with_retry!({
+            let access_key = access_key.to_string(); // 在每次重试时重新克隆
+            let client = self.pool.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
+            let result = guard.as_mut().unwrap().get_token(uid, &access_key).await;
+            // ConnectionGuard 会在作用域结束时自动归还连接
+            result
+        })
     }
 
     async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError> {
         // 增加请求计数
         self.pool.increment_requests(1).await;
         
-        // 尝试最多3次
-        let mut attempts = 0;
-        let max_attempts = 3;
-        
-        loop {
-            let mut client = match self.pool.acquire().await {
-                Ok(client) => client,
-                Err(e) => {
-                    self.pool.increment_errors().await; // 记录错误
-                    return Err(e);
-                }
-            };
-            
-            match client.paint(pos, color).await {
-                Ok(result) => {
-                    // 操作成功，归还连接
-                    self.pool.release(client, false).await;
-                    
-                    // 如果重试过，记录重试成功
-                    if attempts > 0 {
-                        self.pool.increment_retry(true).await;
-                    }
-                    
-                    return Ok(result);
-                }
-                Err(e) => {
-                    attempts += 1;
-                    if attempts >= max_attempts {
-                        // 已达到最大重试次数，归还损坏的连接
-                        self.pool.release(client, true).await;
-                        self.pool.increment_errors().await; // 记录错误
-                        return Err(e);
-                    }
-                    
-                    // 记录重试
-                    self.pool.increment_retry(false).await;
-                    
-                    // 连接可能已损坏，归还并标记为损坏
-                    self.pool.release(client, true).await;
-                    // 继续下一次尝试
-                }
-            }
-        }
+        with_retry!({
+            let client = self.pool.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
+            let result = guard.as_mut().unwrap().paint(pos, color).await;
+            // ConnectionGuard 会在作用域结束时自动归还连接
+            result
+        })
     }
 
     async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
         // 增加批量请求计数
         self.pool.increment_batch_requests(operations.len() as u64).await;
         
-        // 尝试最多3次
-        let mut attempts = 0;
-        let max_attempts = 3;
-        
-        loop {
-            let mut client = match self.pool.acquire().await {
-                Ok(client) => client,
-                Err(e) => {
-                    self.pool.increment_errors().await; // 记录错误
-                    return Err(e);
-                }
-            };
-            
-            match client.paint_batch(operations.clone()).await {
-                Ok(result) => {
-                    // 操作成功，归还连接
-                    self.pool.release(client, false).await;
-                    
-                    // 如果重试过，记录重试成功
-                    if attempts > 0 {
-                        self.pool.increment_retry(true).await;
-                    }
-                    
-                    return Ok(result);
-                }
-                Err(e) => {
-                    attempts += 1;
-                    if attempts >= max_attempts {
-                        // 已达到最大重试次数，归还损坏的连接
-                        self.pool.release(client, true).await;
-                        self.pool.increment_errors().await; // 记录错误
-                        return Err(e);
-                    }
-                    
-                    // 记录重试
-                    self.pool.increment_retry(false).await;
-                    
-                    // 连接可能已损坏，归还并标记为损坏
-                    self.pool.release(client, true).await;
-                    // 继续下一次尝试
-                }
-            }
-        }
+        let ops = operations.clone();
+        with_retry!({
+            let client = self.pool.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
+            let result = guard.as_mut().unwrap().paint_batch(ops.clone()).await;  // 克隆 ops
+            // ConnectionGuard 会在作用域结束时自动归还连接
+            result
+        })
     }
 }
 
