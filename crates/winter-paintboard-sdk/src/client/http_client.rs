@@ -46,7 +46,14 @@ impl HttpProvider {
             return Err(PaintboardError::InvalidData);
         }
 
-        Ok(Board::from_bytes(bytes.to_vec()))
+        // Perform potentially blocking operation in spawn_blocking to avoid blocking the async runtime
+        let bytes_vec = bytes.to_vec();
+        let board = tokio::task::spawn_blocking(move || {
+            Board::from_bytes(bytes_vec)
+        }).await
+        .map_err(|e| PaintboardError::Internal(format!("Task execution failed: {}", e)))?;
+
+        Ok(board)
     }
 
     /// Get a token using UID and access key

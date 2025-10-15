@@ -44,4 +44,7 @@ pub enum PaintboardError {
     
     #[error("Response channel closed")]
     ResponseChannelClosed,
+    
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
