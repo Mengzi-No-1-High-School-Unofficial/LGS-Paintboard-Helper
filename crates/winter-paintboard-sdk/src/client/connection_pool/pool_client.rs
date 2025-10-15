@@ -395,6 +395,10 @@ pub struct PoolMetrics {
     pub http_errors: u64,           // HTTP错误数
     pub auth_errors: u64,           // 认证错误数
     pub other_errors: u64,          // 其他错误数
+    pub circuit_breaker_tripped: u64, // 熔断器触发次数
+    pub transient_errors: u64,      // 暂时性错误数
+    pub client_errors: u64,         // 客户端错误数
+    pub server_errors: u64,         // 服务器错误数
     
     // 统计时间
     pub timestamp: std::time::SystemTime, // 统计时间戳
@@ -422,6 +426,10 @@ impl PoolMetrics {
             http_errors: 0,
             auth_errors: 0,
             other_errors: 0,
+            circuit_breaker_tripped: 0,
+            transient_errors: 0,
+            client_errors: 0,
+            server_errors: 0,
             timestamp: std::time::SystemTime::now(),
         }
     }
@@ -459,6 +467,33 @@ impl PoolMetrics {
             0.0
         } else {
             (self.auth_errors as f64) / (self.total_requests as f64) * 100.0
+        }
+    }
+    
+    // 计算暂时性错误率
+    pub fn transient_error_rate(&self) -> f64 {
+        if self.total_requests == 0 {
+            0.0
+        } else {
+            (self.transient_errors as f64) / (self.total_requests as f64) * 100.0
+        }
+    }
+    
+    // 计算客户端错误率
+    pub fn client_error_rate(&self) -> f64 {
+        if self.total_requests == 0 {
+            0.0
+        } else {
+            (self.client_errors as f64) / (self.total_requests as f64) * 100.0
+        }
+    }
+    
+    // 计算服务器错误率
+    pub fn server_error_rate(&self) -> f64 {
+        if self.total_requests == 0 {
+            0.0
+        } else {
+            (self.server_errors as f64) / (self.total_requests as f64) * 100.0
         }
     }
 }
