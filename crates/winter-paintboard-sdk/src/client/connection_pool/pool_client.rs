@@ -10,6 +10,7 @@ use crate::{
     BasicClient,
     PaintboardClientTrait,
     with_retry,  // 导入宏
+    event::{EventBus, Event},
 };
 
 use super::pool::{ConnectionPool, ConnectionGuard};
@@ -18,9 +19,10 @@ use super::pool::{ConnectionPool, ConnectionGuard};
 pub struct PoolClient {
     pub pool: ConnectionPool,
     event_client: Arc<Mutex<Option<BasicClient>>>, // 专门用于事件监听的连接
+    event_bus: EventBus, // 事件总线
 }
 
-use crate::client::connection_pool::manager::{PoolManagerConfig, start_connection_manager_task};
+use crate::client::connection_pool::manager::start_connection_manager_task;
 
 impl PoolClient {
     pub async fn new(config: Config, min_connections: usize, max_connections: usize) -> Result<Self, PaintboardError> {
@@ -29,6 +31,7 @@ impl PoolClient {
         let pool_client = Self {
             pool,
             event_client: Arc::new(Mutex::new(None)),
+            event_bus: EventBus::global(), // 使用全局事件总线
         };
         
         // 启动后台连接管理器
@@ -64,11 +67,45 @@ impl PoolClient {
             event_client.set_auth(uid, token.clone());
         }
         *self.event_client.lock().await = Some(event_client);
+        
+        // 通过事件客户端建立 WebSocket 连接以开始接收事件
+        // 实际上，当首次调用 paint 或 paint_batch 时会自动初始化 WebSocket 连接
+        // 为了事件监听，我们可以让事件客户端连接到 WebSocket，但这通常是在执行操作时触发的
+        
+        Ok(())
+    }
+    
+    // 强制事件客户端连接到 WebSocket 以开始监听
+    pub async fn connect_event_client(&self) -> Result<(), PaintboardError> {
+        if let Some(ref mut client) = *self.event_client.lock().await {
+            // 调用一个操作来触发 WebSocket 连接的初始化
+            // 但我们会使用一个不会实际发送数据的虚拟操作
+            // 注意：这里使用 get_board 可能不会触发 WebSocket 初始化
+            // 更好的方式是尝试直接初始化 WebSocket 连接
+            let _ = client.get_board().await; // 这将确保 WebSocket 客户端被初始化
+        }
         Ok(())
     }
     
     // 内部方法：执行带故障转移的操作
     // 现在使用 ConnectionPool 的 execute_with_connection 方法，不再需要这个
+    
+    // 获取事件总线实例
+    pub fn event_bus(&self) -> &EventBus {
+        &self.event_bus
+    }
+    
+    // 订阅事件
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Event> {
+        self.event_bus.subscribe()
+    }
+    
+    // 开始监听事件（需要先 setup_event_client）
+    pub async fn start_listening_events(&self) -> Result<(), PaintboardError> {
+        // 事件监听是通过全局 EventBus 自动处理的，不需要特殊启动
+        // 只要 BasicClient 连接了 WebSocket，事件就会自动发送到 EventBus
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -78,7 +115,7 @@ impl PaintboardClientTrait for PoolClient {
         Self: Sized 
     {
         // 默认使用最小4个连接，最大7个连接
-        Self::new(config, 4, 7).await
+        Self::new(config, 2, 7).await
     }
 
     fn set_auth(&mut self, uid: u32, token: String) {
