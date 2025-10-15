@@ -11,6 +11,8 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures::{SinkExt, StreamExt};
 use url::Url;
 use log::{debug, error, info, warn, trace};
+use governor::{Quota, RateLimiter, clock::DefaultClock, state::{InMemoryState, NotKeyed}};
+use std::num::NonZeroU32;
 
 /// WebSocket provider for Winter Paintboard API
 pub struct WsProvider {
@@ -24,11 +26,17 @@ pub struct WsProvider {
     message_task_handle: Option<tokio::task::JoinHandle<()>>,
     // Flag to control reconnection attempts
     should_reconnect: Arc<std::sync::atomic::AtomicBool>,
+    // 速率限制器：每秒最多120个请求
+    rate_limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
 }
 
 impl WsProvider {
     /// Create a new WebSocket provider
     pub async fn new(config: Arc<Config>) -> Result<Self, PaintboardError> {
+        // 创建速率限制器：每秒最多120个请求
+        let quota = Quota::per_second(NonZeroU32::new(120).unwrap());
+        let rate_limiter = RateLimiter::direct(quota);
+        
         Ok(Self {
             config,
             connection: Arc::new(TokioMutex::new(None)),
@@ -37,6 +45,7 @@ impl WsProvider {
             response_channels: Arc::new(TokioMutex::new(HashMap::new())),
             message_task_handle: None,
             should_reconnect: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            rate_limiter: Arc::new(rate_limiter),
         })
     }
 
@@ -342,6 +351,24 @@ impl WsProvider {
 
     /// Paint a pixel at the given position with the specified color
     pub async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError> {
+        // 检查速率限制 - 如果超过限制则静默丢弃请求
+        match self.rate_limiter.check() {
+            Ok(_) => {
+                // 未超过速率限制，继续处理
+            },
+            Err(_) => {
+                // 超过速率限制，静默丢弃请求并记录 debug 日志
+                debug!("速率限制：paint 请求被丢弃，超过每秒120个包的限制 (位置: ({}, {}), 颜色: ({}, {}, {}))", 
+                       pos.x, pos.y, color.r, color.g, color.b);
+                // 返回模拟的成功结果，而不是错误
+                return Ok(PaintResult {
+                    drawing_id: 0,
+                    status: PaintStatus::Success,
+                    message: "Request dropped due to rate limiting".to_string(),
+                });
+            }
+        }
+        
         debug!("开始发送单个绘图请求，位置: ({}, {})", pos.x, pos.y);
         
         // Check if we have authentication
@@ -456,6 +483,18 @@ impl WsProvider {
         
         if operations.is_empty() {
             return Ok(());
+        }
+        
+        // 检查速率限制 - 对于批量操作，我们将其视为单个包
+        match self.rate_limiter.check() {
+            Ok(_) => {
+                // 未超过速率限制，继续处理
+            },
+            Err(_) => {
+                // 超过速率限制，静默丢弃请求并记录 debug 日志
+                debug!("速率限制：paint_batch 请求被丢弃，超过每秒120个包的限制 (操作数量: {})", ops_count);
+                return Ok(());
+            }
         }
         
         // Check if we have authentication

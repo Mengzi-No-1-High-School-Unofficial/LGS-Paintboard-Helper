@@ -22,7 +22,7 @@ pub async fn create_client_by_type(config: Config, client_type: ClientType) -> R
             Ok(Box::new(client))
         }
         ClientType::ConnectionPool => {
-            let client = PoolClient::new(config, 4, 7).await?; // 默认最小4个，最大7个连接
+            let client = PoolClient::new(config, 2, 7).await?; // 默认最小4个，最大7个连接
             Ok(Box::new(client))
         }
     }
