@@ -1,5 +1,5 @@
 use log::info;
-use winter_paintboard_sdk::{PaintboardClient, PaintboardClientTrait, config::Config};
+use winter_paintboard_sdk::{BasicClient, PaintboardClientTrait, config::Config};
 
 /// Gets a token using UID and access key
 pub async fn get_token_with_access_key(
@@ -8,7 +8,7 @@ pub async fn get_token_with_access_key(
 ) -> Result<String, Box<dyn std::error::Error>> {
     info!("正在使用 UID 和访问密钥获取 Token...");
     let config = Config::default();
-    let http_client = PaintboardClient::new(config).await?;
+    let http_client = BasicClient::new(config).await?;
     let token = http_client.get_token(uid, access_key).await?;
     info!("成功获取 Token: {}...", &token[..8]); // 显示开头部分
     Ok(token)

@@ -6,14 +6,14 @@ use crate::{
 use std::sync::Arc;
 use tokio::time::timeout;
 
-/// Batch client for sending multiple paint operations efficiently
-pub struct BatchClient {
+/// Batch helper for sending multiple paint operations efficiently
+pub struct BatchHelper {
     config: Arc<Config>,
     operations: Vec<(Pos, Rgb)>,
 }
 
-impl BatchClient {
-    /// Create a new batch client
+impl BatchHelper {
+    /// Create a new batch helper
     pub fn new(config: Arc<Config>) -> Self {
         Self {
             config,

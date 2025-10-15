@@ -8,21 +8,21 @@ use crate::{
 
     error::PaintboardError, 
     config::Config,
-    PaintboardClient,
+    BasicClient,
 };
 
 
 
 // 连接池项，包含连接和元数据
 struct PoolItem {
-    client: PaintboardClient,
+    client: BasicClient,
     last_used: Instant,
     usage_count: u64,
     is_broken: bool,
 }
 
 impl PoolItem {
-    fn new(client: PaintboardClient) -> Self {
+    fn new(client: BasicClient) -> Self {
         Self {
             client,
             last_used: Instant::now(),
@@ -36,13 +36,13 @@ use crate::client::connection_pool::pool_client::PoolMetrics;
 
 // 连接守卫，利用 RAII 自动管理连接生命周期
 pub struct ConnectionGuard {
-    connection: Option<PaintboardClient>,
+    connection: Option<BasicClient>,
     pool: Arc<ConnectionPool>,
     broken: bool,
 }
 
 impl ConnectionGuard {
-    pub fn new(connection: PaintboardClient, pool: Arc<ConnectionPool>) -> Self {
+    pub fn new(connection: BasicClient, pool: Arc<ConnectionPool>) -> Self {
         Self {
             connection: Some(connection),
             pool,
@@ -54,14 +54,14 @@ impl ConnectionGuard {
         self.broken = true;
     }
     
-    pub fn as_mut(&mut self) -> Option<&mut PaintboardClient> {
+    pub fn as_mut(&mut self) -> Option<&mut BasicClient> {
         self.connection.as_mut()
     }
     
     // 执行操作并返回结果和是否损坏连接的指示
     pub async fn execute_with_retry<F, Fut, T>(&mut self, operation: F) -> Result<T, PaintboardError>
     where
-        F: Fn(&mut PaintboardClient) -> Fut,
+        F: Fn(&mut BasicClient) -> Fut,
         Fut: std::future::Future<Output = Result<T, PaintboardError>>,
     {
         if let Some(client) = self.connection.as_mut() {
@@ -126,7 +126,7 @@ impl ConnectionPool {
     }
     
     // 获取一个连接，带有负载均衡
-    pub async fn acquire(&self) -> Result<PaintboardClient, PaintboardError> {
+    pub async fn acquire(&self) -> Result<BasicClient, PaintboardError> {
         // 创建信号量许可以确保不超过最大连接数
         let _permit = self.semaphore.acquire().await
             .map_err(|_| PaintboardError::ConnectionClosed)?;
@@ -180,7 +180,7 @@ impl ConnectionPool {
     }
     
     // 释放连接归还池中
-    pub async fn release(&self, mut client: PaintboardClient, is_broken: bool) {
+    pub async fn release(&self, mut client: BasicClient, is_broken: bool) {
         // 减少活跃连接数
         {
             let mut active = self.active_count.lock().await;
@@ -213,9 +213,9 @@ impl ConnectionPool {
         // 否则丢弃连接
     }
     
-    // 创建新连接
-    async fn create_new_connection(&self) -> Result<PaintboardClient, PaintboardError> {
-        let client = PaintboardClient::new(self.config.clone()).await?;
+    /// 创建新连接 (供后台管理器使用)
+    pub async fn create_new_connection(&self) -> Result<BasicClient, PaintboardError> {
+        let client = BasicClient::new(self.config.clone()).await?;
         Ok(client)
     }
     
@@ -234,9 +234,38 @@ impl ConnectionPool {
     // 定期清理不活跃连接
     pub async fn cleanup_inactive_connections(&self, max_idle_time: Duration) {
         let mut pool_guard = self.pool.lock().await;
+        let before_count = pool_guard.len();
         pool_guard.retain(|item| {
             item.last_used.elapsed() <= max_idle_time
         });
+        let after_count = pool_guard.len();
+        if before_count != after_count {
+            log::info!("清理了 {} 个闲置连接，当前池中连接数: {}", before_count - after_count, after_count);
+        }
+    }
+    
+    /// 将连接添加到池中 (用于后台管理器)
+    pub async fn add_connection_to_pool(&self, client: BasicClient) {
+        let mut pool_guard = self.pool.lock().await;
+        if pool_guard.len() < self.max_connections {
+            let pool_item = PoolItem {
+                client,
+                last_used: std::time::Instant::now(),
+                usage_count: 0,
+                is_broken: false,
+            };
+            pool_guard.push_back(pool_item);
+            log::debug!("连接已添加到池中，当前池中连接数: {}", pool_guard.len());
+        } else {
+            log::debug!("池已满，无法添加更多连接");
+        }
+    }
+    
+    /// 获取池中的连接数
+    pub async fn get_pool_stats(&self) -> (usize, usize) {
+        let pool_size = self.pool.lock().await.len();
+        let active_count = *self.active_count.lock().await;
+        (pool_size, active_count)
     }
     
     // 内部更新监控数据的方法
@@ -252,7 +281,7 @@ impl ConnectionPool {
     pub async fn execute_with_connection<T, F>(&self, operation: F) -> Result<T, PaintboardError>
     where
         F: Clone,  // 添加 Clone 约束
-        F: FnOnce(&mut PaintboardClient) -> Result<T, PaintboardError>,
+        F: FnOnce(&mut BasicClient) -> Result<T, PaintboardError>,
         T: Send,
     {
         let mut attempts = 0;
@@ -283,7 +312,7 @@ impl ConnectionPool {
     pub async fn execute_with_connection_async<F, Fut, T>(&self, operation: F) -> Result<T, PaintboardError>
     where
         F: Clone,  // 添加 Clone 约束以支持循环中的多次使用
-        F: Fn(&mut PaintboardClient) -> Fut,
+        F: Fn(&mut BasicClient) -> Fut,
         Fut: std::future::Future<Output = Result<T, PaintboardError>> + Send + 'static,
         T: Send + 'static,
     {
@@ -377,7 +406,7 @@ async fn fault_tolerance<T, F, Fut>(
     operation: F,
 ) -> Result<T, PaintboardError>
 where
-    F: Fn(PaintboardClient) -> Fut,
+    F: Fn(BasicClient) -> Fut,
     Fut: std::future::Future<Output = Result<T, PaintboardError>> + Send,
 {
     // 尝试最多3次

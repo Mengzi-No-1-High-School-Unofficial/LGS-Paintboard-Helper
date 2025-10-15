@@ -10,6 +10,6 @@ pub mod error;
 pub mod config;
 pub mod event;
 
-pub use client::{PaintboardClient, PaintboardClientTrait, ConnectionPoolClient, ClientType, create_client_by_type};
+pub use client::{BasicClient, PaintboardClientTrait, PoolClient, ClientType, create_client_by_type};
 pub use models::{Rgb, Pos, Board, PaintResult};
 pub use error::PaintboardError;

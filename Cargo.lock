@@ -2277,6 +2277,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tokio-tungstenite",
+ "tokio-util",
  "url",
  "uuid",
 ]

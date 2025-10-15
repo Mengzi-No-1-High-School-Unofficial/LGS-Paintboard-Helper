@@ -12,8 +12,8 @@ use futures::{SinkExt, StreamExt};
 use url::Url;
 use log::{debug, error, info, warn, trace};
 
-/// WebSocket client for Winter Paintboard API
-pub struct WsClient {
+/// WebSocket provider for Winter Paintboard API
+pub struct WsProvider {
     config: Arc<Config>,
     connection: Arc<TokioMutex<Option<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>>>,
     uid: Option<u32>,
@@ -26,8 +26,8 @@ pub struct WsClient {
     should_reconnect: Arc<std::sync::atomic::AtomicBool>,
 }
 
-impl WsClient {
-    /// Create a new WebSocket client
+impl WsProvider {
+    /// Create a new WebSocket provider
     pub async fn new(config: Arc<Config>) -> Result<Self, PaintboardError> {
         Ok(Self {
             config,
@@ -626,7 +626,7 @@ mod tests {
     #[tokio::test]
     async fn test_ws_client_creation() {
         let config = Arc::new(Config::default());
-        let client = WsClient::new(config).await;
+        let client = WsProvider::new(config).await;
         assert!(client.is_ok());
     }
 }
