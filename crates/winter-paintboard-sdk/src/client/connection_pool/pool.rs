@@ -233,14 +233,27 @@ impl ConnectionPool {
     
     // 定期清理不活跃连接
     pub async fn cleanup_inactive_connections(&self, max_idle_time: Duration) {
-        let mut pool_guard = self.pool.lock().await;
-        let before_count = pool_guard.len();
-        pool_guard.retain(|item| {
-            item.last_used.elapsed() <= max_idle_time
-        });
-        let after_count = pool_guard.len();
-        if before_count != after_count {
-            log::info!("清理了 {} 个闲置连接，当前池中连接数: {}", before_count - after_count, after_count);
+        // 首先获取需要移除的连接，避免长时间持有锁
+        let to_remove_indices = {
+            let pool_guard = self.pool.lock().await;
+            let mut indices = Vec::new();
+            for (i, item) in pool_guard.iter().enumerate() {
+                if item.last_used.elapsed() > max_idle_time {
+                    indices.push(i);
+                }
+            }
+            indices
+        };
+
+        // 移除过期连接
+        if !to_remove_indices.is_empty() {
+            let mut pool_guard = self.pool.lock().await;
+            // 从后往前删除，避免索引变化问题
+            for &idx in to_remove_indices.iter().rev() {
+                pool_guard.remove(idx);
+            }
+            
+            log::info!("清理了 {} 个闲置连接", to_remove_indices.len());
         }
     }
     

@@ -120,17 +120,6 @@ impl PoolManager {
             return true;
         }
 
-        // 如果活跃连接数接近或超过池中连接数，需要扩容
-        let (_, active_count) = tokio::task::block_in_place(|| 
-            // 由于不能在异步上下文中调用异步函数，这里使用简化的判断
-            (current_pool_size, 0) // 这里会在manage_connections中获得正确值
-        );
-        // 实际上我们通过manage_connections函数中获得正确的active_count值
-        if utilization_rate > 0.9 && current_pool_size < max_connections {
-            info!("连接使用率极高({:.2}%)，需要扩容", utilization_rate * 100.0);
-            return true;
-        }
-
         false
     }
 
