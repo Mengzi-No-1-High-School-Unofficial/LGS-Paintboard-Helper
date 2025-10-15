@@ -6,12 +6,12 @@ use crate::{
 use std::sync::Arc;
 
 /// HTTP client for Winter Paintboard API
-pub struct HttpClient {
+pub struct HttpProvider {
     client: reqwest::Client,
     config: Arc<Config>,
 }
 
-impl HttpClient {
+impl HttpProvider {
     /// Create a new HTTP client
     pub fn new(config: Arc<Config>) -> Result<Self, PaintboardError> {
         let client = reqwest::Client::builder()
@@ -93,7 +93,7 @@ mod tests {
     #[ignore] // Ignore this test as it requires a real API endpoint
     async fn test_get_token() {
         let config = Arc::new(Config::default());
-        let client = HttpClient::new(config).unwrap();
+        let client = HttpProvider::new(config).unwrap();
         
         // This test would require actual credentials to work
         // let token = client.get_token(12345, "test_access_key").await;

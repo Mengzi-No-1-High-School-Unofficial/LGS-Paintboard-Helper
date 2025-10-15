@@ -1,9 +1,9 @@
 use crate::{
     error::PaintboardError, 
     config::Config,
-    PaintboardClient,
+    BasicClient,
     PaintboardClientTrait,
-    ConnectionPoolClient,
+    PoolClient,
 };
 use async_trait::async_trait;
 
@@ -18,11 +18,11 @@ pub enum ClientType {
 pub async fn create_client_by_type(config: Config, client_type: ClientType) -> Result<Box<dyn PaintboardClientTrait + Send>, PaintboardError> {
     match client_type {
         ClientType::Basic => {
-            let client = PaintboardClient::new(config).await?;
+            let client = BasicClient::new(config).await?;
             Ok(Box::new(client))
         }
         ClientType::ConnectionPool => {
-            let client = ConnectionPoolClient::new(config, 2, 7).await?; // 默认最小2个，最大7个连接
+            let client = PoolClient::new(config, 4, 7).await?; // 默认最小4个，最大7个连接
             Ok(Box::new(client))
         }
     }

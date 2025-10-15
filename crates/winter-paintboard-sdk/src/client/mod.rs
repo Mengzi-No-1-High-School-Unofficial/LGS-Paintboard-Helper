@@ -1,16 +1,16 @@
 #[macro_use]
 mod connection_pool;
 mod http_client;
-mod ws_client;
+mod ws_provider;
 mod batch_client;
 mod paintboard_client_trait;
 mod factory;
 
-pub use http_client::HttpClient;
-pub use ws_client::WsClient;
-pub use batch_client::BatchClient;
+pub use http_client::HttpProvider;
+pub use ws_provider::WsProvider;
+pub use batch_client::BatchHelper;
 pub use paintboard_client_trait::PaintboardClientTrait;
-pub use connection_pool::{ConnectionPoolClient, ConnectionGuard, PoolMetrics, start_monitoring_task};
+pub use connection_pool::{PoolClient, ConnectionGuard, PoolMetrics, start_monitoring_task};
 pub use factory::{ClientType, create_client_by_type};
 
 use crate::{
@@ -22,20 +22,20 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-/// Main client for interacting with the Winter Paintboard API
-pub struct PaintboardClient {
-    http_client: HttpClient,
-    ws_client: Option<WsClient>, // WebSocket client is optional and created on demand
+/// Basic client for interacting with the Winter Paintboard API
+pub struct BasicClient {
+    http_client: HttpProvider,
+    ws_client: Option<WsProvider>, // WebSocket client is optional and created on demand
     config: Arc<Config>,
     uid: Option<u32>,
     token: Option<String>,
 }
 
-impl PaintboardClient {
-    /// Create a new PaintboardClient with the given configuration
+impl BasicClient {
+    /// Create a new BasicClient with the given configuration
     pub async fn new_impl(config: Config) -> Result<Self, PaintboardError> {
         let config = Arc::new(config);
-        let http_client = HttpClient::new(config.clone())?;
+        let http_client = HttpProvider::new(config.clone())?;
         
         Ok(Self {
             http_client,
@@ -66,7 +66,7 @@ impl PaintboardClient {
     pub async fn paint_impl(&mut self, pos: Pos, color: Rgb) -> Result<crate::models::PaintResult, PaintboardError> {
         // Initialize WebSocket client if not already created
         if self.ws_client.is_none() {
-            let mut ws_client = WsClient::new(self.config.clone()).await?;
+            let mut ws_client = WsProvider::new(self.config.clone()).await?;
             
             // Set authentication if available
             if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
@@ -89,7 +89,7 @@ impl PaintboardClient {
     pub async fn paint_batch_impl(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
         // Initialize WebSocket client if not already created
         if self.ws_client.is_none() {
-            let mut ws_client = WsClient::new(self.config.clone()).await?;
+            let mut ws_client = WsProvider::new(self.config.clone()).await?;
             
             // Set authentication if available
             if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
@@ -110,7 +110,7 @@ impl PaintboardClient {
 }
 
 #[async_trait]
-impl PaintboardClientTrait for PaintboardClient {
+impl PaintboardClientTrait for BasicClient {
     async fn new(config: Config) -> Result<Self, PaintboardError> 
     where 
         Self: Sized 

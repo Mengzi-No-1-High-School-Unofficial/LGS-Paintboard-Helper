@@ -114,6 +114,7 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 cli.monitor_interval,
                 cli.restore_delay,
                 cli.max_batch_size, // 传递批处理大小参数
+                client, // 传递主客户端，支持连接池
             ).await?;
             
             // 在增量模式下，我们不再执行常规的绘图流程

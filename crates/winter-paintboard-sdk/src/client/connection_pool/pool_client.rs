@@ -7,27 +7,34 @@ use crate::{
     error::PaintboardError, 
     models::{Board, Rgb, Pos, PaintResult}, 
     config::Config,
-    PaintboardClient,
+    BasicClient,
     PaintboardClientTrait,
     with_retry,  // 导入宏
 };
 
 use super::pool::{ConnectionPool, ConnectionGuard};
 
-// ConnectionPoolClient 实现
-pub struct ConnectionPoolClient {
+// PoolClient 实现
+pub struct PoolClient {
     pub pool: ConnectionPool,
-    event_client: Arc<Mutex<Option<PaintboardClient>>>, // 专门用于事件监听的连接
+    event_client: Arc<Mutex<Option<BasicClient>>>, // 专门用于事件监听的连接
 }
 
-impl ConnectionPoolClient {
+use crate::client::connection_pool::manager::{PoolManagerConfig, start_connection_manager_task};
+
+impl PoolClient {
     pub async fn new(config: Config, min_connections: usize, max_connections: usize) -> Result<Self, PaintboardError> {
         let pool = ConnectionPool::new(config, min_connections, max_connections);
         
-        Ok(Self {
+        let pool_client = Self {
             pool,
             event_client: Arc::new(Mutex::new(None)),
-        })
+        };
+        
+        // 启动后台连接管理器
+        start_connection_manager_task(pool_client.pool.clone(), None).await;
+        
+        Ok(pool_client)
     }
     
     // 为连接池中的所有连接设置认证信息
@@ -52,7 +59,7 @@ impl ConnectionPoolClient {
     
     // 为事件监听创建专用连接
     pub async fn setup_event_client(&mut self) -> Result<(), PaintboardError> {
-        let mut event_client = PaintboardClient::new(self.pool.config.clone()).await?;
+        let mut event_client = BasicClient::new(self.pool.config.clone()).await?;
         if let (Some(uid), Some(token)) = (self.pool.uid, self.pool.token.as_ref()) {
             event_client.set_auth(uid, token.clone());
         }
@@ -65,13 +72,13 @@ impl ConnectionPoolClient {
 }
 
 #[async_trait]
-impl PaintboardClientTrait for ConnectionPoolClient {
+impl PaintboardClientTrait for PoolClient {
     async fn new(config: Config) -> Result<Self, PaintboardError> 
     where 
         Self: Sized 
     {
-        // 默认使用最小2个连接，最大7个连接
-        Self::new(config, 2, 7).await
+        // 默认使用最小4个连接，最大7个连接
+        Self::new(config, 4, 7).await
     }
 
     fn set_auth(&mut self, uid: u32, token: String) {
@@ -85,9 +92,17 @@ impl PaintboardClientTrait for ConnectionPoolClient {
         with_retry!({
             let client = self.pool.acquire().await?;
             let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
-            let result = guard.as_mut().unwrap().get_board().await;
-            // ConnectionGuard 会在作用域结束时自动归还连接
-            result
+            
+            match guard.as_mut().unwrap().get_board().await {
+                Ok(result) => Ok(result),
+                Err(e) => {
+                    if let PaintboardError::ConnectionClosed = e {
+                        // 如果是连接关闭错误，标记连接为损坏
+                        guard.mark_broken();
+                    }
+                    Err(e)
+                }
+            }
         })
     }
 
@@ -95,13 +110,22 @@ impl PaintboardClientTrait for ConnectionPoolClient {
         // 增加请求计数
         self.pool.increment_requests(1).await;
         
+        let access_key = access_key.to_string();
+        
         with_retry!({
-            let access_key = access_key.to_string(); // 在每次重试时重新克隆
             let client = self.pool.acquire().await?;
             let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
-            let result = guard.as_mut().unwrap().get_token(uid, &access_key).await;
-            // ConnectionGuard 会在作用域结束时自动归还连接
-            result
+            
+            match guard.as_mut().unwrap().get_token(uid, &access_key).await {
+                Ok(result) => Ok(result),
+                Err(e) => {
+                    if let PaintboardError::ConnectionClosed = e {
+                        // 如果是连接关闭错误，标记连接为损坏
+                        guard.mark_broken();
+                    }
+                    Err(e)
+                }
+            }
         })
     }
 
@@ -112,9 +136,17 @@ impl PaintboardClientTrait for ConnectionPoolClient {
         with_retry!({
             let client = self.pool.acquire().await?;
             let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
-            let result = guard.as_mut().unwrap().paint(pos, color).await;
-            // ConnectionGuard 会在作用域结束时自动归还连接
-            result
+            
+            match guard.as_mut().unwrap().paint(pos, color).await {
+                Ok(result) => Ok(result),
+                Err(e) => {
+                    if let PaintboardError::ConnectionClosed = e {
+                        // 如果是连接关闭错误，标记连接为损坏
+                        guard.mark_broken();
+                    }
+                    Err(e)
+                }
+            }
         })
     }
 
@@ -123,12 +155,21 @@ impl PaintboardClientTrait for ConnectionPoolClient {
         self.pool.increment_batch_requests(operations.len() as u64).await;
         
         let ops = operations.clone();
+        
         with_retry!({
             let client = self.pool.acquire().await?;
             let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
-            let result = guard.as_mut().unwrap().paint_batch(ops.clone()).await;  // 克隆 ops
-            // ConnectionGuard 会在作用域结束时自动归还连接
-            result
+            
+            match guard.as_mut().unwrap().paint_batch(ops.clone()).await {
+                Ok(result) => Ok(result),
+                Err(e) => {
+                    if let PaintboardError::ConnectionClosed = e {
+                        // 如果是连接关闭错误，标记连接为损坏
+                        guard.mark_broken();
+                    }
+                    Err(e)
+                }
+            }
         })
     }
 }

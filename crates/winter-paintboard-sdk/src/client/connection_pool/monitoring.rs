@@ -63,7 +63,7 @@ impl ConnectionPool {
 }
 
 // 提供对内部连接池的只读访问
-impl super::ConnectionPoolClient {
+impl super::PoolClient {
     pub fn pool(&self) -> &ConnectionPool {
         &self.pool
     }

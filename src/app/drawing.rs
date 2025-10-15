@@ -1,6 +1,6 @@
 use log::{debug, error, info, warn};
 use tokio::time::Duration;
-use winter_paintboard_sdk::{PaintboardClient, PaintboardClientTrait, config::Config, ClientType, create_client_by_type};
+use winter_paintboard_sdk::{BasicClient, PaintboardClientTrait, config::Config, ClientType, create_client_by_type};
 
 use crate::app::image_processing::ProcessedImageData;
 
@@ -23,7 +23,7 @@ impl ProgressiveMode {
 
 /// Draws an image to the paintboard using various modes
 pub async fn draw_image_to_paintboard(
-    client: &mut PaintboardClient,
+    client: &mut BasicClient,
     processed_image_data: ProcessedImageData,
     progressive_mode: &ProgressiveMode,
     max_batch_size: usize,

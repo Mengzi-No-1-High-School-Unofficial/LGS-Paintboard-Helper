@@ -2,7 +2,7 @@ use log::{info, error, warn, debug};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration, sleep};
-use winter_paintboard_sdk::{PaintboardClient, PaintboardClientTrait, Pos, Rgb};
+use winter_paintboard_sdk::{BasicClient, PaintboardClientTrait, Pos, Rgb};
 use crate::app::image_processing::ProcessedImageData;
 use crate::app::drawing::{create_client, ProgressiveMode};
 use crate::app::board_sync::{LocalBoard, BoardSyncManager};
@@ -246,13 +246,10 @@ pub async fn start_incremental_if_enabled(
     monitor_interval: u64,
     restore_delay: u64,
     max_batch_size: usize, // 添加批处理大小参数
+    mut client: Box<dyn PaintboardClientTrait + Send>, // 从外部传入客户端，支持连接池
 ) -> Result<(), Box<dyn std::error::Error>> {
     if enable_incremental {
         info!("启用增量修改模式");
-        
-        // 初始化绘版客户端
-        let config = winter_paintboard_sdk::config::Config::default();
-        let mut client = create_client(config, winter_paintboard_sdk::ClientType::Basic).await?; // 使用基础客户端，因为增量模式有自己的管理逻辑
         
         // 设置认证信息
         client.set_auth(cli_uid, cli_token.unwrap_or_default().to_string());
