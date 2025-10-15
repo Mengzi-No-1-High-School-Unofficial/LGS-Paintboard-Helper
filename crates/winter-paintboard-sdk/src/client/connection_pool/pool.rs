@@ -311,10 +311,21 @@ impl ConnectionPool {
                 }
                 Err(e) => {
                     attempts += 1;
+                    
+                    // 根据错误类型判断是否需要重试
+                    if !self.should_retry_on_error(&e) {
+                        return Err(e);
+                    }
+                    
                     guard.mark_broken(); // 标记连接已损坏
                     if attempts >= max_attempts {
                         return Err(e);
                     }
+                    
+                    // 实现指数退避延迟
+                    let delay = std::time::Duration::from_millis((1 << attempts) * 100); // 100ms, 200ms, 400ms
+                    tokio::time::sleep(delay).await;
+                    
                     // 作用域结束时连接会被自动归还（并标记为损坏）
                 }
             }
@@ -343,10 +354,21 @@ impl ConnectionPool {
                 }
                 Err(e) => {
                     attempts += 1;
+                    
+                    // 根据错误类型判断是否需要重试
+                    if !self.should_retry_on_error(&e) {
+                        return Err(e);
+                    }
+                    
                     guard.mark_broken(); // 标记连接已损坏
                     if attempts >= max_attempts {
                         return Err(e);
                     }
+                    
+                    // 实现指数退避延迟
+                    let delay = std::time::Duration::from_millis((1 << attempts) * 100); // 100ms, 200ms, 400ms
+                    tokio::time::sleep(delay).await;
+                    
                     // 作用域结束时连接会被自动归还（并标记为损坏）
                 }
             }
@@ -374,6 +396,43 @@ impl ConnectionPool {
         self.update_metrics(|m| {
             m.total_errors += 1;
         }).await;
+    }
+    
+    /// 判断是否应该对特定错误进行重试
+    fn should_retry_on_error(&self, error: &PaintboardError) -> bool {
+        match error {
+            // 这些错误类型表明连接或网络问题，可以重试
+            PaintboardError::Network(_) |
+            PaintboardError::WebSocket(_) |
+            PaintboardError::ConnectionClosed |
+            PaintboardError::Timeout |
+            PaintboardError::ResponseChannelClosed => true,
+            // 这些错误是客户端错误，不应该重试
+            PaintboardError::Http(status) if *status >= 400 && *status < 500 => false,
+            // 服务器错误可以重试
+            PaintboardError::Http(status) if *status >= 500 => true,
+            // 认证错误表示配置问题，不应该重试
+            PaintboardError::Auth(_) => false,
+            // 其他错误类型可能需要重试
+            _ => true,
+        }
+    }
+    
+    // 增加特定错误类型的计数（同步版本）
+    pub fn increment_error_type_counter_sync(&self, error_type: &str) {
+        let pool = self.clone();
+        let error_type = error_type.to_string();  // 转换为拥有所有权的字符串
+        tokio::spawn(async move {
+            pool.update_metrics(|m| {
+                match error_type.as_str() {
+                    "network" => m.network_errors += 1,
+                    "auth" => m.auth_errors += 1,
+                    s if s.starts_with("http") => m.http_errors += 1,  // 修改条件以匹配上面的调用
+                    "other" => m.other_errors += 1,
+                    _ => m.other_errors += 1,
+                }
+            }).await;
+        });
     }
     
     // 增加重试计数
