@@ -9,7 +9,6 @@ use crate::{
     config::Config,
     BasicClient,
     PaintboardClientTrait,
-    with_retry,  // 导入宏
     event::{EventBus, Event},
 };
 
@@ -126,21 +125,61 @@ impl PaintboardClientTrait for PoolClient {
         // 增加请求计数
         self.pool.increment_requests(1).await;
         
-        with_retry!({
+        // 改进的重试逻辑：包含错误分类和指数退避
+        let mut attempts = 0;
+        let max_attempts = 3;
+        
+        loop {
             let client = self.pool.acquire().await?;
             let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
             
             match guard.as_mut().unwrap().get_board().await {
-                Ok(result) => Ok(result),
+                Ok(result) => {
+                    return Ok(result);
+                }
                 Err(e) => {
-                    if let PaintboardError::ConnectionClosed = e {
-                        // 如果是连接关闭错误，标记连接为损坏
-                        guard.mark_broken();
+                    attempts += 1;
+                    
+                    // 根据错误类型判断是否需要重试
+                    match &e {
+                        PaintboardError::Network(_) |
+                        PaintboardError::WebSocket(_) |
+                        PaintboardError::ConnectionClosed |
+                        PaintboardError::Timeout |
+                        PaintboardError::ResponseChannelClosed => {
+                            self.pool.increment_error_type_counter_sync("network");
+                            guard.mark_broken();
+                        },
+                        PaintboardError::Http(status) if *status >= 500 => {
+                            self.pool.increment_error_type_counter_sync("http");
+                            // 对于服务器错误，可能连接仍是好的，不标记损坏
+                        },
+                        PaintboardError::Auth(_) => {
+                            self.pool.increment_error_type_counter_sync("auth");
+                            // 认证错误不重试，直接返回
+                            return Err(e);
+                        },
+                        PaintboardError::Http(status) if *status >= 400 && *status < 500 => {
+                            self.pool.increment_error_type_counter_sync("http");
+                            // 客户端错误不重试，直接返回
+                            return Err(e);
+                        },
+                        _ => {
+                            self.pool.increment_error_type_counter_sync("other");
+                            guard.mark_broken();
+                        }
                     }
-                    Err(e)
+                    
+                    if attempts >= max_attempts {
+                        return Err(e);
+                    }
+                    
+                    // 实现指数退避延迟
+                    let delay = std::time::Duration::from_millis((1 << attempts) * 100); // 100ms, 200ms, 400ms
+                    tokio::time::sleep(delay).await;
                 }
             }
-        })
+        }
     }
 
     async fn get_token(&self, uid: u32, access_key: &str) -> Result<String, PaintboardError> {
@@ -149,65 +188,183 @@ impl PaintboardClientTrait for PoolClient {
         
         let access_key = access_key.to_string();
         
-        with_retry!({
+        // 改进的重试逻辑：包含错误分类和指数退避
+        let mut attempts = 0;
+        let max_attempts = 3;
+        
+        loop {
             let client = self.pool.acquire().await?;
             let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
             
             match guard.as_mut().unwrap().get_token(uid, &access_key).await {
-                Ok(result) => Ok(result),
+                Ok(result) => {
+                    return Ok(result);
+                }
                 Err(e) => {
-                    if let PaintboardError::ConnectionClosed = e {
-                        // 如果是连接关闭错误，标记连接为损坏
-                        guard.mark_broken();
+                    attempts += 1;
+                    
+                    // 根据错误类型判断是否需要重试
+                    match &e {
+                        PaintboardError::Network(_) |
+                        PaintboardError::WebSocket(_) |
+                        PaintboardError::ConnectionClosed |
+                        PaintboardError::Timeout |
+                        PaintboardError::ResponseChannelClosed => {
+                            self.pool.increment_error_type_counter_sync("network");
+                            guard.mark_broken();
+                        },
+                        PaintboardError::Http(status) if *status >= 500 => {
+                            self.pool.increment_error_type_counter_sync("http");
+                            // 对于服务器错误，可能连接仍是好的，不标记损坏
+                        },
+                        PaintboardError::Auth(_) => {
+                            self.pool.increment_error_type_counter_sync("auth");
+                            // 认证错误不重试，直接返回
+                            return Err(e);
+                        },
+                        PaintboardError::Http(status) if *status >= 400 && *status < 500 => {
+                            self.pool.increment_error_type_counter_sync("http");
+                            // 客户端错误不重试，直接返回
+                            return Err(e);
+                        },
+                        _ => {
+                            self.pool.increment_error_type_counter_sync("other");
+                            guard.mark_broken();
+                        }
                     }
-                    Err(e)
+                    
+                    if attempts >= max_attempts {
+                        return Err(e);
+                    }
+                    
+                    // 实现指数退避延迟
+                    let delay = std::time::Duration::from_millis((1 << attempts) * 100); // 100ms, 200ms, 400ms
+                    tokio::time::sleep(delay).await;
                 }
             }
-        })
+        }
     }
 
     async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError> {
         // 增加请求计数
         self.pool.increment_requests(1).await;
         
-        with_retry!({
+        // 改进的重试逻辑：包含错误分类和指数退避
+        let mut attempts = 0;
+        let max_attempts = 3;
+        
+        loop {
             let client = self.pool.acquire().await?;
             let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
             
             match guard.as_mut().unwrap().paint(pos, color).await {
-                Ok(result) => Ok(result),
+                Ok(result) => {
+                    return Ok(result);
+                }
                 Err(e) => {
-                    if let PaintboardError::ConnectionClosed = e {
-                        // 如果是连接关闭错误，标记连接为损坏
-                        guard.mark_broken();
+                    attempts += 1;
+                    
+                    // 根据错误类型判断是否需要重试
+                    match &e {
+                        PaintboardError::Network(_) |
+                        PaintboardError::WebSocket(_) |
+                        PaintboardError::ConnectionClosed |
+                        PaintboardError::Timeout |
+                        PaintboardError::ResponseChannelClosed => {
+                            self.pool.increment_error_type_counter_sync("network");
+                            guard.mark_broken();
+                        },
+                        PaintboardError::Http(status) if *status >= 500 => {
+                            self.pool.increment_error_type_counter_sync("http");
+                            // 对于服务器错误，可能连接仍是好的，不标记损坏
+                        },
+                        PaintboardError::Auth(_) => {
+                            self.pool.increment_error_type_counter_sync("auth");
+                            // 认证错误不重试，直接返回
+                            return Err(e);
+                        },
+                        PaintboardError::Http(status) if *status >= 400 && *status < 500 => {
+                            self.pool.increment_error_type_counter_sync("http");
+                            // 客户端错误不重试，直接返回
+                            return Err(e);
+                        },
+                        _ => {
+                            self.pool.increment_error_type_counter_sync("other");
+                            guard.mark_broken();
+                        }
                     }
-                    Err(e)
+                    
+                    if attempts >= max_attempts {
+                        return Err(e);
+                    }
+                    
+                    // 实现指数退避延迟
+                    let delay = std::time::Duration::from_millis((1 << attempts) * 100); // 100ms, 200ms, 400ms
+                    tokio::time::sleep(delay).await;
                 }
             }
-        })
+        }
     }
 
     async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
         // 增加批量请求计数
         self.pool.increment_batch_requests(operations.len() as u64).await;
         
-        let ops = operations.clone();
+        // 改进的重试逻辑：包含错误分类和指数退避
+        let mut attempts = 0;
+        let max_attempts = 3;
         
-        with_retry!({
+        loop {
             let client = self.pool.acquire().await?;
             let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
             
-            match guard.as_mut().unwrap().paint_batch(ops.clone()).await {
-                Ok(result) => Ok(result),
+            match guard.as_mut().unwrap().paint_batch(operations.clone()).await {
+                Ok(result) => {
+                    return Ok(result);
+                }
                 Err(e) => {
-                    if let PaintboardError::ConnectionClosed = e {
-                        // 如果是连接关闭错误，标记连接为损坏
-                        guard.mark_broken();
+                    attempts += 1;
+                    
+                    // 根据错误类型判断是否需要重试
+                    match &e {
+                        PaintboardError::Network(_) |
+                        PaintboardError::WebSocket(_) |
+                        PaintboardError::ConnectionClosed |
+                        PaintboardError::Timeout |
+                        PaintboardError::ResponseChannelClosed => {
+                            self.pool.increment_error_type_counter_sync("network");
+                            guard.mark_broken();
+                        },
+                        PaintboardError::Http(status) if *status >= 500 => {
+                            self.pool.increment_error_type_counter_sync("http");
+                            // 对于服务器错误，可能连接仍是好的，不标记损坏
+                        },
+                        PaintboardError::Auth(_) => {
+                            self.pool.increment_error_type_counter_sync("auth");
+                            // 认证错误不重试，直接返回
+                            return Err(e);
+                        },
+                        PaintboardError::Http(status) if *status >= 400 && *status < 500 => {
+                            self.pool.increment_error_type_counter_sync("http");
+                            // 客户端错误不重试，直接返回
+                            return Err(e);
+                        },
+                        _ => {
+                            self.pool.increment_error_type_counter_sync("other");
+                            guard.mark_broken();
+                        }
                     }
-                    Err(e)
+                    
+                    if attempts >= max_attempts {
+                        return Err(e);
+                    }
+                    
+                    // 实现指数退避延迟
+                    let delay = std::time::Duration::from_millis((1 << attempts) * 100); // 100ms, 200ms, 400ms
+                    tokio::time::sleep(delay).await;
                 }
             }
-        })
+        }
     }
 }
 
@@ -234,6 +391,10 @@ pub struct PoolMetrics {
     pub retry_count: u64,           // 重试次数
     pub retry_success_count: u64,   // 重试成功次数
     pub retry_failed_count: u64,    // 重试失败次数
+    pub network_errors: u64,        // 网络错误数
+    pub http_errors: u64,           // HTTP错误数
+    pub auth_errors: u64,           // 认证错误数
+    pub other_errors: u64,          // 其他错误数
     
     // 统计时间
     pub timestamp: std::time::SystemTime, // 统计时间戳
@@ -257,6 +418,10 @@ impl PoolMetrics {
             retry_count: 0,
             retry_success_count: 0,
             retry_failed_count: 0,
+            network_errors: 0,
+            http_errors: 0,
+            auth_errors: 0,
+            other_errors: 0,
             timestamp: std::time::SystemTime::now(),
         }
     }
@@ -276,6 +441,24 @@ impl PoolMetrics {
             0.0
         } else {
             (self.retry_success_count as f64) / (self.retry_count as f64) * 100.0
+        }
+    }
+    
+    // 计算网络错误率
+    pub fn network_error_rate(&self) -> f64 {
+        if self.total_requests == 0 {
+            0.0
+        } else {
+            (self.network_errors as f64) / (self.total_requests as f64) * 100.0
+        }
+    }
+    
+    // 计算认证错误率
+    pub fn auth_error_rate(&self) -> f64 {
+        if self.total_requests == 0 {
+            0.0
+        } else {
+            (self.auth_errors as f64) / (self.total_requests as f64) * 100.0
         }
     }
 }
