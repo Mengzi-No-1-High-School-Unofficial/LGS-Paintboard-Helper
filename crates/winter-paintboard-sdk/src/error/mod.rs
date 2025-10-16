@@ -114,9 +114,25 @@ pub enum PaintboardError {
     /// WebSocket 连接因特定关闭码而关闭。
     #[error("连接因 {0} 关闭: {1}")]
     ConnectionClosedWithCode(u16, String),
+
+    /// 封装了另一个错误并添加了上下文信息。
+    #[error("上下文错误: {0}, 源错误: {1}")]
+    ContextualError(String, Box<PaintboardError>),
 }
 
 impl PaintboardError {
+    /// 创建带有上下文信息的错误。
+    ///
+    /// # 参数
+    /// - `context`: 错误的上下文描述。
+    /// - `source`: 原始的 `PaintboardError`。
+    pub fn contextual<C>(context: C, source: PaintboardError) -> Self
+    where
+        C: Into<String>,
+    {
+        PaintboardError::ContextualError(context.into(), Box::new(source))
+    }
+
     /// 创建网络错误的便捷方法。
     ///
     /// # 参数

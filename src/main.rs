@@ -4,25 +4,27 @@
 //! It supports multiple drawing modes including incremental, loop, and one-time drawing.
 
 use clap::Parser;
-use env_logger;
-use log::info;
+use tracing_subscriber;
+use tracing::info;
 
 /// Application module containing all the core functionality
 mod app;
 
 #[tokio::main]
 /// Main async function - entry point of the application
-/// 
-/// Initializes the logger, parses command-line arguments, and starts the application
+///
+/// Initializes the tracing subscriber, parses command-line arguments, and starts the application
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize the logger with env_logger
-    env_logger::init();
-    
+    // Initialize tracing subscriber with environment filter (controlled by RUST_LOG)
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     // Parse command line arguments using clap
     let cli = app::cli::Cli::parse();
-    
+
     info!("启动绘板应用...");
-    
+
     // Run the main application logic
     app::run_app(cli).await
 }

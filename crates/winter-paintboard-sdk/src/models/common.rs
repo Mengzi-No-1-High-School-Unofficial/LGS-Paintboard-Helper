@@ -58,7 +58,7 @@ impl Rgb {
 }
 
 /// 画板上的位置坐标。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Pos {
     /// X 坐标 (0-999)。
     pub x: u16,

@@ -140,7 +140,7 @@ impl IncrementalManager {
                relative_y < target_image_data.img_height as i32 {
                 
                 // 检查本地绘版上的对应像素是否与目标颜色一致
-                if let Some(current_pixel_status) = local_pixels.get(&(pos.x, pos.y)) {
+                if let Some(current_pixel_status) = local_pixels.get(pos) {
                     // 计算颜色差异，用于优先级排序
                     let color_diff = Self::calculate_color_difference(&current_pixel_status.color, target_color);
                     
@@ -151,8 +151,8 @@ impl IncrementalManager {
                                current_pixel_status.color.r, current_pixel_status.color.g, current_pixel_status.color.b);
                         
                         pixel_differences.push((
-                            *pos, 
-                            *target_color, 
+                            *pos,
+                            *target_color,
                             color_diff
                         ));
                     }
