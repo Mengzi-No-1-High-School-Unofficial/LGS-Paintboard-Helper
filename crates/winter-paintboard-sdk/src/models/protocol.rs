@@ -37,7 +37,7 @@ impl ProtocolMessage {
     /// Parse a binary message from the server
     pub fn parse(data: &[u8]) -> Result<Self, PaintboardError> {
         if data.is_empty() {
-            return Err(PaintboardError::InvalidData);
+            return Err(PaintboardError::invalid_data("Empty data for protocol message parsing"));
         }
         
         let opcode = data[0];
@@ -47,7 +47,7 @@ impl ProtocolMessage {
             0xfc => Ok(ProtocolMessage::HeartbeatPing),
             0xfa => {
                 if payload.len() < 7 { // 4 bytes for pos + 3 bytes for RGB
-                    return Err(PaintboardError::InvalidData);
+                    return Err(PaintboardError::invalid_data("Not enough bytes for PaintEvent payload"));
                 }
                 
                 let pos = Pos::from_bytes(&payload[0..4])?;
@@ -57,7 +57,7 @@ impl ProtocolMessage {
             },
             0xff => {
                 if payload.len() < 5 { // 4 bytes for drawing_id + 1 byte for status
-                    return Err(PaintboardError::InvalidData);
+                    return Err(PaintboardError::invalid_data("Not enough bytes for PaintResult payload"));
                 }
                 
                 let drawing_id = u32::from_le_bytes([

@@ -21,6 +21,7 @@ rand = "0.8"
 uuid = { version = "1.0", features = ["v4"] }
 async-trait = "0.1"
 governor = { version = "0.6", features = ["std"] }
+tracing = "0.1.41"
 
 [dev-dependencies]
 tokio-test = "0.4"

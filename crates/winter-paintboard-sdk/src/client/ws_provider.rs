@@ -95,7 +95,7 @@ impl WsProvider {
                 let event_bus = EventBus::global();
                 let _ = event_bus.send(Event::error_event(format!("WebSocket connection failed: {}", e)));
                 
-                Err(PaintboardError::WebSocket(e.to_string()))
+                Err(PaintboardError::websocket(e.to_string()))
             }
         }
     }
@@ -372,8 +372,8 @@ impl WsProvider {
         debug!("开始发送单个绘图请求，位置: ({}, {})", pos.x, pos.y);
         
         // Check if we have authentication
-        let uid = self.uid.ok_or(PaintboardError::Auth("UID not set".to_string()))?;
-        let token = self.token.clone().ok_or(PaintboardError::Auth("Token not set".to_string()))?;
+        let uid = self.uid.ok_or(PaintboardError::auth("UID not set".to_string()))?;
+        let token = self.token.clone().ok_or(PaintboardError::auth("Token not set".to_string()))?;
         
         // Ensure we're connected
         {
@@ -435,7 +435,7 @@ impl WsProvider {
                             let event_bus = EventBus::global();
                             let _ = event_bus.send(Event::error_event(format!("Failed to send paint message: {}", e)));
                             
-                            return Err(PaintboardError::WebSocket(e.to_string()));
+                            return Err(PaintboardError::websocket(e.to_string()));
                         }
                     }
                 }
@@ -471,7 +471,7 @@ impl WsProvider {
                         debug!("已清理超时的响应通道");
                     }
                 }
-                Err(PaintboardError::Timeout)
+                Err(PaintboardError::timeout())
             }
         }
     }
@@ -498,8 +498,8 @@ impl WsProvider {
         }
         
         // Check if we have authentication
-        let uid = self.uid.ok_or(PaintboardError::Auth("UID not set".to_string()))?;
-        let token = self.token.clone().ok_or(PaintboardError::Auth("Token not set".to_string()))?;
+        let uid = self.uid.ok_or(PaintboardError::auth("UID not set".to_string()))?;
+        let token = self.token.clone().ok_or(PaintboardError::auth("Token not set".to_string()))?;
         
         let mut all_binary_data = Vec::new(); // For sticky packet mechanism
         
@@ -559,7 +559,7 @@ impl WsProvider {
                             let event_bus = EventBus::global();
                             let _ = event_bus.send(Event::error_event(format!("Failed to send batch message: {}", e)));
                             
-                            return Err(PaintboardError::WebSocket(e.to_string()));
+                            return Err(PaintboardError::websocket(e.to_string()));
                         }
                     }
                 }
@@ -593,7 +593,7 @@ impl WsProvider {
             ws_stream
                 .send(Message::Binary(pong_message))
                 .await
-                .map_err(|e| PaintboardError::WebSocket(e.to_string()))?;
+                .map_err(|e| PaintboardError::websocket(e.to_string()))?;
         }
         
         Ok(())
@@ -611,21 +611,21 @@ impl WsProvider {
             
             // Wait for the next message
             if let Some(msg) = ws_stream.next().await {
-                let msg = msg.map_err(|e| PaintboardError::WebSocket(e.to_string()))?;
+                let msg = msg.map_err(|e| PaintboardError::websocket(e.to_string()))?;
                 
                 match msg {
                     Message::Binary(data) => {
                         ProtocolMessage::parse(&data)
                     },
                     Message::Text(_) => {
-                        Err(PaintboardError::InvalidData)
+                        Err(PaintboardError::invalid_data("Received unexpected text message"))
                     },
                     Message::Close(_) => {
                         Err(PaintboardError::ConnectionClosed)
                     },
                     Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
                         // Handle ping/pong and other frame types as invalid for our protocol
-                        Err(PaintboardError::InvalidData)
+                        Err(PaintboardError::invalid_data("Received unexpected WebSocket frame type"))
                     }
                 }
             } else {

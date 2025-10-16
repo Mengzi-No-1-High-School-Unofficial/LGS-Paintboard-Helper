@@ -24,7 +24,7 @@ impl BatchHelper {
     /// Add a paint operation to the batch
     pub fn add_paint(&mut self, pos: Pos, color: Rgb) -> Result<(), PaintboardError> {
         if self.operations.len() >= self.config.max_batch_size {
-            return Err(PaintboardError::RateLimit);
+            return Err(PaintboardError::rate_limit());
         }
         
         self.operations.push((pos, color));
