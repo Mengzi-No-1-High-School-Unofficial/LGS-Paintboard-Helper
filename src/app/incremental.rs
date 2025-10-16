@@ -58,7 +58,6 @@ impl IncrementalManager {
                 &crate::app::drawing::ProgressiveMode::None, // 使用普通模式
                 self.max_batch_size, // 使用传入的批量大小
                 self.restore_delay.as_millis() as u64, // 使用恢复延迟作为绘制延迟
-                true, // 启用批量模式
             ).await?;
         }
         

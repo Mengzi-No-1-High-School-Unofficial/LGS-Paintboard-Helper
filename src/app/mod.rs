@@ -237,8 +237,7 @@ async fn run_draw_loop_mode(
             &processed_image_data,
             &progressive_mode,
             max_batch_size,
-            delay,
-            batch_mode,
+            delay
         ).await {
             error!("绘制图片时发生错误: {:?}", e);
         }
@@ -316,7 +315,6 @@ async fn run_draw_once_mode(
         &progressive_mode,
         max_batch_size,
         delay,
-        batch_mode,
     ).await?;
     
     info!("图片绘制完成！图片尺寸: {}x{}, 起始坐标: ({}, {})", 
