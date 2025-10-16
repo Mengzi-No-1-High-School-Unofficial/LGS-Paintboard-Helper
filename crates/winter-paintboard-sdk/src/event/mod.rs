@@ -10,6 +10,7 @@ pub enum Event {
     HeartbeatEvent,
     ConnectionOpened,
     ConnectionClosed,
+    ConnectionClosedWithCode(u16),               // 包含关闭状态码的连接关闭事件
     ErrorOccurred(String),
 }
 

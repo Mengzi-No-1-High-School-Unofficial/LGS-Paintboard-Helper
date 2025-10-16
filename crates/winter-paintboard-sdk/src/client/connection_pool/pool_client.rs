@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use crate::{
     error::PaintboardError, 
     models::{Board, Rgb, Pos, PaintResult}, 
-    config::Config,
+    config::{Config, ConnectionMode},
     BasicClient,
     PaintboardClientTrait,
     event::{EventBus, Event},
@@ -16,8 +16,8 @@ use super::pool::{ConnectionPool, ConnectionGuard};
 
 // PoolClient 实现
 pub struct PoolClient {
-    pub pool: ConnectionPool,
-    event_client: Arc<Mutex<Option<BasicClient>>>, // 专门用于事件监听的连接
+    pub write_pool: ConnectionPool,          // 专门用于写操作的连接池
+    read_client: Arc<Mutex<Option<BasicClient>>>, // 专门用于读取事件的只读连接
     event_bus: EventBus, // 事件总线
 }
 
@@ -25,49 +25,164 @@ use crate::client::connection_pool::manager::start_connection_manager_task;
 
 impl PoolClient {
     pub async fn new(config: Config, min_connections: usize, max_connections: usize) -> Result<Self, PaintboardError> {
-        let pool = ConnectionPool::new(config, min_connections, max_connections);
+        // 创建写连接池配置（使用WriteOnly模式）
+        let mut write_config = config.clone();
+        write_config.connection_mode = ConnectionMode::WriteOnly;
+        let write_pool = ConnectionPool::new(write_config, min_connections, max_connections);
+        
+        // 创建读连接配置（使用ReadOnly模式）
+        let mut read_config = config.clone();
+        read_config.connection_mode = ConnectionMode::ReadOnly;
         
         let pool_client = Self {
-            pool,
-            event_client: Arc::new(Mutex::new(None)),
+            write_pool,
+            read_client: Arc::new(Mutex::new(None)),
             event_bus: EventBus::global(), // 使用全局事件总线
         };
         
-        // 启动后台连接管理器
-        start_connection_manager_task(pool_client.pool.clone(), None).await;
+        // 启动后台连接管理器（只管理写连接池）
+        start_connection_manager_task(pool_client.write_pool.clone(), None).await;
+        
+        // 初始化只读连接
+        pool_client.setup_read_only_connection().await?;
         
         Ok(pool_client)
     }
     
+    // 初始化只读连接
+    async fn setup_read_only_connection(&self) -> Result<(), PaintboardError> {
+        // 创建只读配置
+        let mut read_config = self.write_pool.config.clone();
+        read_config.connection_mode = ConnectionMode::ReadOnly;
+        
+        let mut read_client = BasicClient::new(read_config).await?;
+        if let (Some(uid), Some(token)) = (self.write_pool.uid, self.write_pool.token.as_ref()) {
+            read_client.set_auth(uid, token.clone());
+        }
+        
+        {
+            let mut client_guard = self.read_client.lock().await;
+            *client_guard = Some(read_client);
+        }
+        
+        // 确保只读客户端连接到WebSocket以开始接收事件
+        self.connect_read_only_client().await?;
+        
+        // 启动事件监听
+        self.start_event_listener().await?;
+        
+        Ok(())
+    }
+    
+    // 连接只读客户端到WebSocket
+    async fn connect_read_only_client(&self) -> Result<(), PaintboardError> {
+        if let Some(ref mut client) = *self.read_client.lock().await {
+            // 调用get_board以触发WebSocket连接的初始化
+            let _ = client.get_board().await;
+        }
+        Ok(())
+    }
+    
+    // 启动事件监听任务
+    pub async fn start_event_listener(&self) -> Result<(), PaintboardError> {
+        // 由于BasicClient内部的WsProvider已经通过EventBus自动分发事件
+        // 这里只需要确保只读客户端已连接，事件会自动通过EventBus传播
+        // BasicClient内部会自动将事件转发到EventBus，所以我们不需要额外的监听循环
+        
+        Ok(())
+    }
+    
+    // 健康检查只读连接
+    pub async fn check_read_client_health(&self) -> bool {
+        if let Some(ref client) = *self.read_client.lock().await {
+            // 检查连接是否仍然有效（通过调用get_board检查连接状态）
+            client.get_board().await.is_ok()
+        } else {
+            false
+        }
+    }
+    
+    // 重新连接只读连接
+    pub async fn reconnect_read_client(&self) -> Result<(), PaintboardError> {
+        // 创建只读配置
+        let mut read_config = self.write_pool.config.clone();
+        read_config.connection_mode = ConnectionMode::ReadOnly;
+        
+        let mut read_client = BasicClient::new(read_config).await?;
+        if let (Some(uid), Some(token)) = (self.write_pool.uid, self.write_pool.token.as_ref()) {
+            read_client.set_auth(uid, token.clone());
+        }
+        
+        {
+            let mut client_guard = self.read_client.lock().await;
+            *client_guard = Some(read_client);
+        }
+        
+        // 确保只读客户端连接到WebSocket
+        self.connect_read_only_client().await?;
+        
+        Ok(())
+    }
+    
+    // 获取只读连接状态
+    pub async fn get_read_client_status(&self) -> String {
+        if self.read_client.lock().await.is_some() {
+            "Connected".to_string()
+        } else {
+            "Disconnected".to_string()
+        }
+    }
+    
+    // 获取写连接池状态
+    pub async fn get_write_pool_status(&self) -> String {
+        format!(
+            "PoolSize: {}, ActiveConnections: {}", 
+            self.write_pool.pool_size().await,
+            self.write_pool.active_count().await
+        )
+    }
+    
     // 为连接池中的所有连接设置认证信息
     pub fn set_auth(&mut self, uid: u32, token: String) {
-        self.pool.set_auth(uid, token.clone());
+        self.write_pool.set_auth(uid, token.clone());
+        // 也需要为只读连接设置认证，使用spawn来处理异步操作
+        let read_client = Arc::clone(&self.read_client);
+        let token_clone = token.clone();
+        tokio::spawn(async move {
+            if let Some(ref mut client) = *read_client.lock().await {
+                client.set_auth(uid, token_clone);
+            }
+        });
     }
     
     // 获取池大小
     pub async fn pool_size(&self) -> usize {
-        self.pool.pool_size().await
+        self.write_pool.pool_size().await
     }
     
     // 获取活跃连接数
     pub async fn active_count(&self) -> usize {
-        self.pool.active_count().await
+        self.write_pool.active_count().await
     }
     
     // 清理不活跃连接
     pub async fn cleanup_inactive_connections(&self, max_idle_time: Duration) {
-        self.pool.cleanup_inactive_connections(max_idle_time).await;
+        self.write_pool.cleanup_inactive_connections(max_idle_time).await;
     }
     
     // 为事件监听创建专用连接
     pub async fn setup_event_client(&mut self) -> Result<(), PaintboardError> {
-        let mut event_client = BasicClient::new(self.pool.config.clone()).await?;
-        if let (Some(uid), Some(token)) = (self.pool.uid, self.pool.token.as_ref()) {
-            event_client.set_auth(uid, token.clone());
-        }
-        *self.event_client.lock().await = Some(event_client);
+        // 创建只读配置
+        let mut read_config = self.write_pool.config.clone();
+        read_config.connection_mode = ConnectionMode::ReadOnly;
         
-        // 通过事件客户端建立 WebSocket 连接以开始接收事件
+        let mut read_client = BasicClient::new(read_config).await?;
+        if let (Some(uid), Some(token)) = (self.write_pool.uid, self.write_pool.token.as_ref()) {
+            read_client.set_auth(uid, token.clone());
+        }
+        *self.read_client.lock().await = Some(read_client);
+        
+        // 通过读客户端建立 WebSocket 连接以开始接收事件
         // 实际上，当首次调用 paint 或 paint_batch 时会自动初始化 WebSocket 连接
         // 为了事件监听，我们可以让事件客户端连接到 WebSocket，但这通常是在执行操作时触发的
         
@@ -76,12 +191,15 @@ impl PoolClient {
     
     // 强制事件客户端连接到 WebSocket 以开始监听
     pub async fn connect_event_client(&self) -> Result<(), PaintboardError> {
-        if let Some(ref mut client) = *self.event_client.lock().await {
-            // 调用一个操作来触发 WebSocket 连接的初始化
-            // 但我们会使用一个不会实际发送数据的虚拟操作
-            // 注意：这里使用 get_board 可能不会触发 WebSocket 初始化
-            // 更好的方式是尝试直接初始化 WebSocket 连接
-            let _ = client.get_board().await; // 这将确保 WebSocket 客户端被初始化
+        {
+            let mut client_guard = self.read_client.lock().await;
+            if let Some(client) = client_guard.as_mut() {
+                // 调用一个操作来触发 WebSocket 连接的初始化
+                // 但我们会使用一个不会实际发送数据的虚拟操作
+                // 注意：这里使用 get_board 可能不会触发 WebSocket 初始化
+                // 更好的方式是尝试直接初始化 WebSocket 连接
+                let _ = client.get_board().await; // 这将确保 WebSocket 客户端被初始化
+            }
         }
         Ok(())
     }
@@ -118,20 +236,23 @@ impl PaintboardClientTrait for PoolClient {
     }
 
     fn set_auth(&mut self, uid: u32, token: String) {
-        self.pool.set_auth(uid, token);
+        self.write_pool.set_auth(uid, token);
     }
 
     async fn get_board(&self) -> Result<Board, PaintboardError> {
+        // 对于get_board操作，我们可以使用只读连接
+        // 但为了保持与现有逻辑一致，仍使用连接池
+        
         // 增加请求计数
-        self.pool.increment_requests(1).await;
+        self.write_pool.increment_requests(1).await;
         
         // 改进的重试逻辑：包含错误分类和指数退避
         let mut attempts = 0;
         let max_attempts = 3;
         
         loop {
-            let client = self.pool.acquire().await?;
-            let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
+            let client = self.write_pool.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.write_pool.clone()));
             
             match guard.as_mut().unwrap().get_board().await {
                 Ok(result) => {
@@ -147,25 +268,25 @@ impl PaintboardClientTrait for PoolClient {
                         PaintboardError::ConnectionClosed |
                         PaintboardError::Timeout |
                         PaintboardError::ResponseChannelClosed => {
-                            self.pool.increment_error_type_counter_sync("network");
+                            self.write_pool.increment_error_type_counter_sync("network");
                             guard.mark_broken();
                         },
                         PaintboardError::Http(status) if *status >= 500 => {
-                            self.pool.increment_error_type_counter_sync("http");
+                            self.write_pool.increment_error_type_counter_sync("http");
                             // 对于服务器错误，可能连接仍是好的，不标记损坏
                         },
                         PaintboardError::Auth(_) => {
-                            self.pool.increment_error_type_counter_sync("auth");
+                            self.write_pool.increment_error_type_counter_sync("auth");
                             // 认证错误不重试，直接返回
                             return Err(e);
                         },
                         PaintboardError::Http(status) if *status >= 400 && *status < 500 => {
-                            self.pool.increment_error_type_counter_sync("http");
+                            self.write_pool.increment_error_type_counter_sync("http");
                             // 客户端错误不重试，直接返回
                             return Err(e);
                         },
                         _ => {
-                            self.pool.increment_error_type_counter_sync("other");
+                            self.write_pool.increment_error_type_counter_sync("other");
                             guard.mark_broken();
                         }
                     }
@@ -184,7 +305,7 @@ impl PaintboardClientTrait for PoolClient {
 
     async fn get_token(&self, uid: u32, access_key: &str) -> Result<String, PaintboardError> {
         // 增加请求计数
-        self.pool.increment_requests(1).await;
+        self.write_pool.increment_requests(1).await;
         
         let access_key = access_key.to_string();
         
@@ -193,8 +314,8 @@ impl PaintboardClientTrait for PoolClient {
         let max_attempts = 3;
         
         loop {
-            let client = self.pool.acquire().await?;
-            let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
+            let client = self.write_pool.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.write_pool.clone()));
             
             match guard.as_mut().unwrap().get_token(uid, &access_key).await {
                 Ok(result) => {
@@ -210,25 +331,25 @@ impl PaintboardClientTrait for PoolClient {
                         PaintboardError::ConnectionClosed |
                         PaintboardError::Timeout |
                         PaintboardError::ResponseChannelClosed => {
-                            self.pool.increment_error_type_counter_sync("network");
+                            self.write_pool.increment_error_type_counter_sync("network");
                             guard.mark_broken();
                         },
                         PaintboardError::Http(status) if *status >= 500 => {
-                            self.pool.increment_error_type_counter_sync("http");
+                            self.write_pool.increment_error_type_counter_sync("http");
                             // 对于服务器错误，可能连接仍是好的，不标记损坏
                         },
                         PaintboardError::Auth(_) => {
-                            self.pool.increment_error_type_counter_sync("auth");
+                            self.write_pool.increment_error_type_counter_sync("auth");
                             // 认证错误不重试，直接返回
                             return Err(e);
                         },
                         PaintboardError::Http(status) if *status >= 400 && *status < 500 => {
-                            self.pool.increment_error_type_counter_sync("http");
+                            self.write_pool.increment_error_type_counter_sync("http");
                             // 客户端错误不重试，直接返回
                             return Err(e);
                         },
                         _ => {
-                            self.pool.increment_error_type_counter_sync("other");
+                            self.write_pool.increment_error_type_counter_sync("other");
                             guard.mark_broken();
                         }
                     }
@@ -247,15 +368,15 @@ impl PaintboardClientTrait for PoolClient {
 
     async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError> {
         // 增加请求计数
-        self.pool.increment_requests(1).await;
+        self.write_pool.increment_requests(1).await;
         
         // 改进的重试逻辑：包含错误分类和指数退避
         let mut attempts = 0;
         let max_attempts = 3;
         
         loop {
-            let client = self.pool.acquire().await?;
-            let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
+            let client = self.write_pool.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.write_pool.clone()));
             
             match guard.as_mut().unwrap().paint(pos, color).await {
                 Ok(result) => {
@@ -271,25 +392,25 @@ impl PaintboardClientTrait for PoolClient {
                         PaintboardError::ConnectionClosed |
                         PaintboardError::Timeout |
                         PaintboardError::ResponseChannelClosed => {
-                            self.pool.increment_error_type_counter_sync("network");
+                            self.write_pool.increment_error_type_counter_sync("network");
                             guard.mark_broken();
                         },
                         PaintboardError::Http(status) if *status >= 500 => {
-                            self.pool.increment_error_type_counter_sync("http");
+                            self.write_pool.increment_error_type_counter_sync("http");
                             // 对于服务器错误，可能连接仍是好的，不标记损坏
                         },
                         PaintboardError::Auth(_) => {
-                            self.pool.increment_error_type_counter_sync("auth");
+                            self.write_pool.increment_error_type_counter_sync("auth");
                             // 认证错误不重试，直接返回
                             return Err(e);
                         },
                         PaintboardError::Http(status) if *status >= 400 && *status < 500 => {
-                            self.pool.increment_error_type_counter_sync("http");
+                            self.write_pool.increment_error_type_counter_sync("http");
                             // 客户端错误不重试，直接返回
                             return Err(e);
                         },
                         _ => {
-                            self.pool.increment_error_type_counter_sync("other");
+                            self.write_pool.increment_error_type_counter_sync("other");
                             guard.mark_broken();
                         }
                     }
@@ -308,15 +429,15 @@ impl PaintboardClientTrait for PoolClient {
 
     async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
         // 增加批量请求计数
-        self.pool.increment_batch_requests(operations.len() as u64).await;
+        self.write_pool.increment_batch_requests(operations.len() as u64).await;
         
         // 改进的重试逻辑：包含错误分类和指数退避
         let mut attempts = 0;
         let max_attempts = 3;
         
         loop {
-            let client = self.pool.acquire().await?;
-            let mut guard = ConnectionGuard::new(client, Arc::new(self.pool.clone()));
+            let client = self.write_pool.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.write_pool.clone()));
             
             match guard.as_mut().unwrap().paint_batch(operations.clone()).await {
                 Ok(result) => {
@@ -332,25 +453,25 @@ impl PaintboardClientTrait for PoolClient {
                         PaintboardError::ConnectionClosed |
                         PaintboardError::Timeout |
                         PaintboardError::ResponseChannelClosed => {
-                            self.pool.increment_error_type_counter_sync("network");
+                            self.write_pool.increment_error_type_counter_sync("network");
                             guard.mark_broken();
                         },
                         PaintboardError::Http(status) if *status >= 500 => {
-                            self.pool.increment_error_type_counter_sync("http");
+                            self.write_pool.increment_error_type_counter_sync("http");
                             // 对于服务器错误，可能连接仍是好的，不标记损坏
                         },
                         PaintboardError::Auth(_) => {
-                            self.pool.increment_error_type_counter_sync("auth");
+                            self.write_pool.increment_error_type_counter_sync("auth");
                             // 认证错误不重试，直接返回
                             return Err(e);
                         },
                         PaintboardError::Http(status) if *status >= 400 && *status < 500 => {
-                            self.pool.increment_error_type_counter_sync("http");
+                            self.write_pool.increment_error_type_counter_sync("http");
                             // 客户端错误不重试，直接返回
                             return Err(e);
                         },
                         _ => {
-                            self.pool.increment_error_type_counter_sync("other");
+                            self.write_pool.increment_error_type_counter_sync("other");
                             guard.mark_broken();
                         }
                     }
