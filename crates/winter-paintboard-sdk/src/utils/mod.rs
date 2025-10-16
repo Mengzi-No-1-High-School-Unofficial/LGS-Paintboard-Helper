@@ -14,7 +14,7 @@ pub mod binary {
     /// Unpack a message from binary format
     pub fn unpack_message(data: &[u8]) -> Result<(u8, &[u8]), PaintboardError> {
         if data.is_empty() {
-            return Err(PaintboardError::InvalidData);
+            return Err(PaintboardError::invalid_data("Empty data for unpack_message"));
         }
         
         let opcode = data[0];

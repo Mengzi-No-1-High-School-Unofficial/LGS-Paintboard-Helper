@@ -16,7 +16,7 @@ impl HttpProvider {
     pub fn new(config: Arc<Config>) -> Result<Self, PaintboardError> {
         let client = reqwest::Client::builder()
             .build()
-            .map_err(|e| PaintboardError::Network(e.to_string()))?;
+            .map_err(|e| PaintboardError::network(e.to_string()))?;
 
         Ok(Self { client, config })
     }
@@ -30,7 +30,7 @@ impl HttpProvider {
             .get(&url)
             .send()
             .await
-            .map_err(|e| PaintboardError::Network(e.to_string()))?;
+            .map_err(|e| PaintboardError::network(e.to_string()))?;
 
         if !response.status().is_success() {
             return Err(PaintboardError::Http(response.status().as_u16()));
@@ -39,11 +39,11 @@ impl HttpProvider {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| PaintboardError::Network(e.to_string()))?;
+            .map_err(|e| PaintboardError::network(e.to_string()))?;
 
         // Validate the size: 1000 * 600 * 3 = 1,800,000 bytes
         if bytes.len() != 1_800_000 {
-            return Err(PaintboardError::InvalidData);
+            return Err(PaintboardError::invalid_data(format!("Board data size mismatch: expected 1,800,000 bytes, got {}", bytes.len())));
         }
 
         // Perform potentially blocking operation in spawn_blocking to avoid blocking the async runtime
@@ -72,7 +72,7 @@ impl HttpProvider {
             .json(&auth_request)
             .send()
             .await
-            .map_err(|e| PaintboardError::Network(e.to_string()))?;
+            .map_err(|e| PaintboardError::network(e.to_string()))?;
 
         if !response.status().is_success() {
             return Err(PaintboardError::Http(response.status().as_u16()));
@@ -84,7 +84,7 @@ impl HttpProvider {
             .map_err(|e| PaintboardError::JsonParse(e.to_string()))?;
 
         if token_response.status_code != 200 {
-            return Err(PaintboardError::Auth(format!("API returned error status {}: token data", token_response.status_code)));
+            return Err(PaintboardError::auth(format!("API returned error status {}: token data", token_response.status_code)));
         }
 
         Ok(token_response.data.token)

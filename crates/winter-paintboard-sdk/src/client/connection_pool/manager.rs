@@ -6,6 +6,7 @@ use log::{info, debug, warn};
 
 use crate::config::Config;
 use super::pool::{ConnectionPool};
+use crate::error::PaintboardError;
 
 /// 连接池管理器配置
 #[derive(Debug, Clone)]
@@ -64,7 +65,7 @@ impl PoolManager {
                 tokio::select! {
                     _ = interval.tick() => {
                         if let Err(e) = Self::manage_connections(&pool, &config).await {
-                            warn!("连接池管理任务出错: {}", e);
+                            warn!("连接池管理任务出错: {:?}", e); // 现在 e 是 PaintboardError
                         }
                     }
                     _ = cancellation_token.cancelled() => {
@@ -77,9 +78,16 @@ impl PoolManager {
     }
 
     /// 管理连接池的主要逻辑
-    async fn manage_connections(pool: &ConnectionPool, config: &PoolManagerConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn manage_connections(pool: &ConnectionPool, config: &PoolManagerConfig) -> Result<(), PaintboardError> {
         let (pool_size, active_count) = pool.get_pool_stats().await;
         let total_connections = pool_size + active_count;
+        
+        if total_connections == 0 && pool.max_connections > 0 {
+            // 如果连接池为空，且允许创建连接，尝试创建最小连接数
+            for _ in 0..pool.min_connections {
+                let _ = pool.create_new_connection().await; // 尝试创建，但不阻止流程
+            }
+        }
 
         // 计算活跃率
         let utilization_rate = if total_connections > 0 {
@@ -176,7 +184,7 @@ impl PoolManager {
                             info!("扩容成功 - 已创建并添加第{}个新连接", i + 1);
                         }
                         Err(e) => {
-                            warn!("创建新连接失败: {}", e);
+                            warn!("创建新连接失败: {:?}", e);
                             // 即使创建失败也继续尝试其他连接
                         }
                     }
