@@ -1,7 +1,7 @@
 use crate::{
     error::PaintboardError, 
     models::{Rgb, Pos, PaintOperation, PaintResult, PaintStatus, ProtocolMessage, OpCode},
-    config::Config,
+    config::{Config, ConnectionMode},
     event::{EventBus, Event},
 };
 use std::collections::HashMap;
@@ -33,8 +33,8 @@ pub struct WsProvider {
 impl WsProvider {
     /// Create a new WebSocket provider
     pub async fn new(config: Arc<Config>) -> Result<Self, PaintboardError> {
-        // 创建速率限制器：每秒最多120个请求
-        let quota = Quota::per_second(NonZeroU32::new(120).unwrap());
+        // 创建速率限制器：每秒最多256个请求，符合文档规范
+        let quota = Quota::per_second(NonZeroU32::new(256).unwrap());
         let rate_limiter = RateLimiter::direct(quota);
         
         Ok(Self {
