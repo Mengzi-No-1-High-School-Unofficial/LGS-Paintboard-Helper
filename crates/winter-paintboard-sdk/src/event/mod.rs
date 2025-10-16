@@ -123,14 +123,15 @@ impl std::error::Error for EventBusError {}
 /// 全局事件总线实例。
 /// 使用 `OnceLock` 确保全局实例只被初始化一次。
 static GLOBAL_EVENT_BUS: OnceLock<EventBus> = OnceLock::new();
+const DEFAULT_EVENT_BUS_CAPACITY: usize = 1024 * 1024;  // 1 megas
 
 impl EventBus {
     /// 获取或创建全局单例事件总线实例。
     ///
-    /// 如果全局事件总线尚未初始化，它将以默认容量 (10000) 进行初始化。
+    /// 如果全局事件总线尚未初始化，它将以默认容量 ([`DEFAULT_EVENT_BUS_CAPACITY`]) 进行初始化。
     pub fn global() -> EventBus {
         GLOBAL_EVENT_BUS
-            .get_or_init(|| EventBus::new(10000)) // 默认容量为 10000 个事件
+            .get_or_init(|| EventBus::new(DEFAULT_EVENT_BUS_CAPACITY))
             .clone()
     }
     
