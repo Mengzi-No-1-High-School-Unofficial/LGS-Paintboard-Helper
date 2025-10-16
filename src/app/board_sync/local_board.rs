@@ -28,6 +28,10 @@ pub struct LocalBoard {
     is_initialized: bool,
     width: u16,
     height: u16,
+    // 添加版本号以跟踪数据更新
+    version: u64,
+    // 添加数据校验和用于完整性验证
+    checksum: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +50,8 @@ impl LocalBoard {
             is_initialized: false,
             width,
             height,
+            version: 0,
+            checksum: None,
         }
     }
 
@@ -65,6 +71,8 @@ impl LocalBoard {
                         timestamp: current_time,
                     }
                 );
+                self.version += 1;
+                self.checksum = Some(self.calculate_checksum());
             } else {
                 // 来自自己的事件，只有在当前位置不是他人绘制的情况下才更新
                 // 这样可以避免自己的绘制覆盖服务端真实状态
@@ -81,6 +89,8 @@ impl LocalBoard {
                                     timestamp: current_time,
                                 }
                             );
+                            self.version += 1;
+                            self.checksum = Some(self.calculate_checksum());
                         } else {
                             debug!("忽略自己的绘制事件，因为服务端显示他人已修改: ({}, {})", x, y);
                         }
@@ -95,6 +105,8 @@ impl LocalBoard {
                                 timestamp: current_time,
                             }
                         );
+                        self.version += 1;
+                        self.checksum = Some(self.calculate_checksum());
                     }
                 }
             }
@@ -132,31 +144,117 @@ impl LocalBoard {
         }
         self.is_initialized = true;
         self.last_sync_time = Some(std::time::SystemTime::now());
+        self.version += 1;
+        self.checksum = Some(self.calculate_checksum());
     }
 
     /// 从Board对象更新本地数据 - 这是权威数据
     pub fn update_from_board(&mut self, board: &Board) {
         // 全量更新时，服务器数据是绝对权威
-        self.pixels.clear();
+        // 但不直接清空，而是对比并更新差异
         
+        // 收集所有需要更新或删除的像素
+        let mut updates = Vec::new();
+        let mut additions = Vec::new();
+        let mut removals = Vec::new();
+        
+        // 检查本地存在的像素是否与服务器数据一致，或是否在服务器范围内
+        for &(x, y) in self.pixels.keys() {
+            // 如果像素坐标在服务器画板范围内，则需要验证
+            if x < board.width && y < board.height {
+                if let Ok(server_pixel) = board.get_pixel(x, y) {
+                    let server_color = Rgb::new(server_pixel.r, server_pixel.g, server_pixel.b);
+                    // 如果本地存储的颜色与服务器不一致，则记录更新
+                    if let Some(local_pixel_status) = self.pixels.get(&(x, y)) {
+                        if local_pixel_status.color != server_color {
+                            updates.push(((x, y), PixelStatus {
+                                color: server_color,
+                                source: PixelSource::Other, // 来自服务器的数据视为他人
+                                timestamp: std::time::SystemTime::now(),
+                            }));
+                        }
+                    }
+                } else {
+                    // 如果无法从服务器获取像素数据，则记录为待删除
+                    removals.push((x, y));
+                }
+            } else {
+                // 如果像素坐标超出服务器画板范围，则记录为待删除（理论上不应发生）
+                removals.push((x, y));
+            }
+        }
+        
+        // 添加服务器有但本地没有的像素
         for y in 0..board.height.min(self.height) {
             for x in 0..board.width.min(self.width) {
-                if let Ok(pixel) = board.get_pixel(x, y) {
-                    let color = Rgb::new(pixel.r, pixel.g, pixel.b);
-                    self.pixels.insert(
-                        (x, y),
-                        PixelStatus {
-                            color,
+                if let Ok(server_pixel) = board.get_pixel(x, y) {
+                    let server_color = Rgb::new(server_pixel.r, server_pixel.g, server_pixel.b);
+                    // 只记录不存在的像素为待添加
+                    if !self.pixels.contains_key(&(x, y)) {
+                        additions.push(((x, y), PixelStatus {
+                            color: server_color,
                             source: PixelSource::Other, // 来自服务器的数据视为他人
                             timestamp: std::time::SystemTime::now(),
-                        }
-                    );
+                        }));
+                    }
                 }
             }
         }
         
+        // 记录更新前的版本，用于判断是否有实际更改
+        let original_version = self.version;
+        let has_changes = !updates.is_empty() || !additions.is_empty() || !removals.is_empty();
+        
+        // 执行实际的更新操作
+        for ((x, y), new_status) in updates {
+            self.pixels.insert((x, y), new_status);
+        }
+        
+        for ((x, y), new_status) in additions {
+            self.pixels.insert((x, y), new_status);
+        }
+        
+        for (x, y) in removals {
+            self.pixels.remove(&(x, y));
+        }
+        
+        // 只有当实际发生了更改时，才更新版本号和校验和
+        if has_changes {
+            self.version += 1;
+            self.checksum = Some(self.calculate_checksum());
+        }
+        
         self.is_initialized = true;
         self.last_sync_time = Some(std::time::SystemTime::now());
+    }
+
+    /// 计算数据校验和
+    fn calculate_checksum(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        // 对像素数据进行哈希
+        for ((x, y), pixel_status) in &self.pixels {
+            x.hash(&mut hasher);
+            y.hash(&mut hasher);
+            pixel_status.color.r.hash(&mut hasher);
+            pixel_status.color.g.hash(&mut hasher);
+            pixel_status.color.b.hash(&mut hasher);
+            (pixel_status.source as u8).hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// 检查数据完整性
+    pub fn verify_integrity(&self) -> bool {
+        if let Some(stored_checksum) = self.checksum {
+            let current_checksum = self.calculate_checksum();
+            stored_checksum == current_checksum
+        } else {
+            // 如果没有校验和，则无法验证
+            true
+        }
     }
 
     /// 检查是否已初始化
@@ -182,6 +280,16 @@ impl LocalBoard {
     /// 获取绘版尺寸
     pub fn dimensions(&self) -> (u16, u16) {
         (self.width, self.height)
+    }
+
+    /// 获取当前版本号
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// 获取校验和
+    pub fn checksum(&self) -> Option<u64> {
+        self.checksum
     }
 }
 
