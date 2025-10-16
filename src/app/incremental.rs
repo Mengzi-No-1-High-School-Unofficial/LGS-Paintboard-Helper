@@ -237,7 +237,7 @@ impl IncrementalManager {
 pub async fn start_incremental_if_enabled(
     cli_token: Option<String>,
     cli_uid: u32,
-    _cli_ws_url: Option<String>, // 使用下划线前缀表示未使用
+    _cli_ws_url: Option<String>, // 参数未使用，因为客户端已在外部创建并配置
     sync_manager: &BoardSyncManager,
     enable_incremental: bool,
     target_image_data: &ProcessedImageData,

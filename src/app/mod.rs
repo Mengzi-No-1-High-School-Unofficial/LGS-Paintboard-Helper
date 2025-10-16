@@ -109,14 +109,15 @@ async fn run_incremental_mode(
     let sync_manager = BoardSyncManager::new(&event_bus);
     
     // 为同步任务创建新的客户端
-    let sync_config = Config::default();
+    let mut sync_config = Config::default();
+    sync_config.ws_url = ws_url.clone().unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
     let mut sync_client = create_client(sync_config, client_type).await?;
     sync_client.as_mut().set_auth(uid, token.to_string());
     
-    // 启动全量同步循环
-    sync_manager.start_sync_loop(
+    // 启动增量同步循环
+    sync_manager.start_incremental_sync_loop(
         sync_client,
-        Duration::from_secs(300) // 默认同步间隔
+        Duration::from_secs(monitor_interval) // 使用命令行传入的监控间隔作为同步间隔
     ).await?;
     
     // 启动事件监听（增量更新）
@@ -128,8 +129,8 @@ async fn run_incremental_mode(
     start_export_if_enabled(
         &sync_manager,
         true, // 增量模式下默认启用导出
-        "exports".to_string(),
-        600, // 默认导出间隔
+        "exports".to_string(), // 可以考虑从CLI添加导出目录参数
+        monitor_interval, // 使用命令行传入的监控间隔作为导出间隔
     ).await?;
     
     // 启动增量修改模式
@@ -146,7 +147,7 @@ async fn run_incremental_mode(
     start_incremental_if_enabled(
         Some(token.clone()), // 传递token
         uid,
-        ws_url.clone(),
+        ws_url, // 传递ws_url参数（现在会使用）
         &sync_manager,
         true, // 启用增量模式
         &processed_image_data,
@@ -370,6 +371,7 @@ async fn run_get_board_mode(
     
     // 创建HTTP客户端来获取画板数据
     let http_client = HttpProvider::new(std::sync::Arc::new(config))?;
+    
     let board = http_client.get_board().await?;
     
     match output {
