@@ -16,6 +16,8 @@ winter-paintboard-sdk = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 rustc-hash = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [workspace.dependencies]
 clap = { version = "4.0", features = ["derive"] }
@@ -25,3 +27,5 @@ winter-paintboard-sdk = { path = "crates/winter-paintboard-sdk" }
 log = "0.4"
 env_logger = "0.10"
 rustc-hash = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

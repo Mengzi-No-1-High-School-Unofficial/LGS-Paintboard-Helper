@@ -30,7 +30,12 @@ impl HttpProvider {
             .get(&url)
             .send()
             .await
-            .map_err(|e| PaintboardError::network(e.to_string()))?;
+            .map_err(|e| {
+                PaintboardError::contextual(
+                    format!("HTTP GET failed for get_board: {}", &url),
+                    PaintboardError::network(e.to_string()),
+                )
+            })?;
 
         if !response.status().is_success() {
             return Err(PaintboardError::Http(response.status().as_u16()));
@@ -39,7 +44,12 @@ impl HttpProvider {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| PaintboardError::network(e.to_string()))?;
+            .map_err(|e| {
+                PaintboardError::contextual(
+                    format!("reading response body for get_board: {}", &url),
+                    PaintboardError::network(e.to_string()),
+                )
+            })?;
 
         // Validate the size: 1000 * 600 * 3 = 1,800,000 bytes
         if bytes.len() != 1_800_000 {
@@ -72,7 +82,12 @@ impl HttpProvider {
             .json(&auth_request)
             .send()
             .await
-            .map_err(|e| PaintboardError::network(e.to_string()))?;
+            .map_err(|e| {
+                PaintboardError::contextual(
+                    format!("HTTP POST failed for get_token: {}", &url),
+                    PaintboardError::network(e.to_string()),
+                )
+            })?;
 
         if !response.status().is_success() {
             return Err(PaintboardError::Http(response.status().as_u16()));
@@ -81,7 +96,12 @@ impl HttpProvider {
         let token_response: TokenResponse = response
             .json()
             .await
-            .map_err(|e| PaintboardError::JsonParse(e.to_string()))?;
+            .map_err(|e| {
+                PaintboardError::contextual(
+                    format!("parse token response from {}", &url),
+                    PaintboardError::JsonParse(e.to_string()),
+                )
+            })?;
 
         if token_response.status_code != 200 {
             return Err(PaintboardError::auth(format!("API returned error status {}: token data", token_response.status_code)));

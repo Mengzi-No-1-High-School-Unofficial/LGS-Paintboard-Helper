@@ -10,7 +10,7 @@ use tokio::sync::{Mutex as TokioMutex, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures::{SinkExt, StreamExt};
 use url::Url;
-use log::{debug, error, info, warn, trace};
+use tracing::{debug, error, info, warn, trace};
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::{InMemoryState, NotKeyed}};
 use std::num::NonZeroU32;
 
@@ -102,12 +102,12 @@ impl WsProvider {
 
     /// Start the background task for processing incoming WebSocket messages
     async fn start_message_processing_task(&mut self) {
-        log::debug!("开始启动消息处理任务");
+        debug!("开始启动消息处理任务");
         
         // Cancel the previous task if it exists
         if let Some(handle) = self.message_task_handle.take() {
             handle.abort();
-            log::debug!("已停止之前的消息处理任务");
+            debug!("已停止之前的消息处理任务");
         }
         
         let connection_clone = self.connection.clone();
@@ -118,7 +118,7 @@ impl WsProvider {
         let _token = self.token.clone();  // Keep for reconnection with auth
         
         self.message_task_handle = Some(tokio::spawn(async move {
-            log::debug!("消息处理任务开始运行");
+            debug!("消息处理任务开始运行");
             // Track the reconnection attempts with exponential backoff
             let mut reconnect_delay = tokio::time::Duration::from_secs(1);
             let max_reconnect_delay = tokio::time::Duration::from_secs(60);
