@@ -66,8 +66,6 @@ impl BasicClient {
             token: None,
         };
 
-        res.init_ws_provider_if_none().await?;
-
         Ok(res)
     }
 

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use log::info;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -39,6 +40,7 @@ impl PoolClient {
                 Ok(client) => {
                     // 认证信息将在后续 set_auth 中统一设置；此处直接将客户端放入池中
                     write_pool.add_connection_to_pool(client).await;
+                    info!("正在创建连接，现在连接池中有 {:?} 个连接", write_pool.pool_size().await);
                 }
                 Err(e) => {
                     log::warn!("预创建写连接失败: {:?}", e);
