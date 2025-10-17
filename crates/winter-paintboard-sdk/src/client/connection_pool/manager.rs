@@ -263,11 +263,16 @@ impl PoolManager {
 }
 
 /// 便捷函数：启动连接池管理任务
+/// 如果传入的 config 为 None，则视为显式禁用自动管理（保持固定连接数），将不会启动后台管理任务。
 pub async fn start_connection_manager_task(
     pool: ConnectionPool,
     config: Option<PoolManagerConfig>,
 ) {
-    let config = config.unwrap_or_else(|| PoolManagerConfig::default());
+    if config.is_none() {
+        info!("连接池管理器已被禁用（config 为 None），保持固定连接数，跳过启动");
+        return;
+    }
+    let config = config.unwrap();
     let manager = PoolManager::new(pool, config);
     manager.start().await;
 }

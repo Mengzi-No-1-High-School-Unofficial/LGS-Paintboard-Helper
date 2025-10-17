@@ -58,13 +58,17 @@ impl BasicClient {
         let config = Arc::new(config);
         let http_client = HttpProvider::new(config.clone())?;
 
-        Ok(Self {
+        let mut res = Self {
             http_client,
             ws_client: None,
             config,
             uid: None,
             token: None,
-        })
+        };
+
+        res.init_ws_provider_if_none().await?;
+
+        Ok(res)
     }
 
     /// 设置认证凭据 (UID 和令牌)。
@@ -115,19 +119,9 @@ impl BasicClient {
         pos: Pos,
         color: Rgb,
     ) -> Result<crate::models::PaintResult, PaintboardError> {
-        // Initialize WebSocket client if not already created
-        if self.ws_client.is_none() {
-            let mut ws_client = WsProvider::new(self.config.clone()).await?;
-
-            // Set authentication if available
-            if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
-                ws_client.set_auth(uid, token.clone());
-            }
-
-            self.ws_client = Some(ws_client);
-        }
-
         // Get a mutable reference to the WebSocket client and call paint
+        self.init_ws_provider_if_none().await?;
+
         if let Some(ref mut ws_client) = self.ws_client {
             ws_client.paint(pos, color).await
         } else {
@@ -149,6 +143,19 @@ impl BasicClient {
         operations: Vec<(Pos, Rgb)>,
     ) -> Result<(), PaintboardError> {
         // Initialize WebSocket client if not already created
+        self.init_ws_provider_if_none().await?;
+
+        // Get a mutable reference to the WebSocket client and call paint_batch
+        if let Some(ref mut ws_client) = self.ws_client {
+            ws_client.paint_batch(operations).await
+        } else {
+            // This should not happen, but added for safety
+            Err(PaintboardError::ClientNotInitialized)
+        }
+    }
+
+    pub async fn init_ws_provider_if_none(&mut self) -> Result<(), PaintboardError> {
+        // Initialize WebSocket client if not already created
         if self.ws_client.is_none() {
             let mut ws_client = WsProvider::new(self.config.clone()).await?;
 
@@ -160,13 +167,7 @@ impl BasicClient {
             self.ws_client = Some(ws_client);
         }
 
-        // Get a mutable reference to the WebSocket client and call paint_batch
-        if let Some(ref mut ws_client) = self.ws_client {
-            ws_client.paint_batch(operations).await
-        } else {
-            // This should not happen, but added for safety
-            Err(PaintboardError::ClientNotInitialized)
-        }
+        Ok(())
     }
 }
 
