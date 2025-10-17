@@ -1,14 +1,13 @@
-use log::debug;
+use tracing::debug;
 use rustc_hash::FxHashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use winter_paintboard_sdk::models::{Board, Rgb, Pos};
 
 // 像素状态，区分来源和时间戳
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PixelSource {
-    Own,      // 来自自己的绘制
-    Other,    // 来自其他用户的绘制
+    Own = 0,      // 来自自己的绘制
+    Other = 1,    // 来自其他用户的绘制
 }
 
 #[derive(Debug, Clone)]
@@ -299,6 +298,7 @@ impl LocalBoard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use winter_paintboard_sdk::models::{Board, Pixel};
 
     #[test]
     fn test_local_board_creation() {
@@ -327,5 +327,40 @@ mod tests {
         board.update_pixels(pixels_to_update, PixelSource::Own);
         assert_eq!(board.get_pixel(0, 0), Some(Rgb::new(255, 0, 0)));
         assert_eq!(board.get_pixel(1, 1), Some(Rgb::new(0, 255, 0)));
+    }
+
+    #[test]
+    fn test_checksum_order_independence() {
+        let mut a = LocalBoard::new(100, 100);
+        let mut b = LocalBoard::new(100, 100);
+        let p1 = Pos::new(2, 3).unwrap();
+        let p2 = Pos::new(5, 6).unwrap();
+        let c1 = Rgb::new(10, 20, 30);
+        let c2 = Rgb::new(40, 50, 60);
+        a.update_pixels(vec![(p1, c1), (p2, c2)], PixelSource::Own);
+        b.update_pixels(vec![(p2, c2), (p1, c1)], PixelSource::Own);
+        assert_eq!(a.checksum(), b.checksum());
+        assert!(a.verify_integrity());
+        assert!(b.verify_integrity());
+    }
+
+    #[test]
+    fn test_update_from_board_applies_server_data() {
+        // create a server board and modify a few pixels, then feed to LocalBoard
+        let mut server_board = Board::new();
+        // set pixel (0,0) to white and (1,0) to red
+        server_board.set_pixel(0, 0, Pixel::new(255,255,255)).unwrap();
+        server_board.set_pixel(1, 0, Pixel::new(255,0,0)).unwrap();
+
+        let mut local = LocalBoard::new(1000, 600);
+        // local has different color at (0,0)
+        local.update_pixel(0, 0, Rgb::new(0,0,0), PixelSource::Own);
+
+        local.update_from_board(&server_board);
+
+        // After updating, local should match server at those positions
+        assert_eq!(local.get_pixel(0, 0), Some(Rgb::new(255,255,255)));
+        assert_eq!(local.get_pixel(1, 0), Some(Rgb::new(255,0,0)));
+        assert!(local.is_initialized());
     }
 }
