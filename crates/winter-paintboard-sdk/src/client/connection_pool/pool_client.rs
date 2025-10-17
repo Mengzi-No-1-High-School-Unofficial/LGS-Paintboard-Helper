@@ -31,20 +31,28 @@ impl PoolClient {
         // 创建写连接池配置（使用WriteOnly模式）
         let mut write_config = config.clone();
         write_config.connection_mode = ConnectionMode::WriteOnly;
-        let write_pool = ConnectionPool::new(write_config, min_connections, max_connections);
-
-        // 创建读连接配置（使用ReadOnly模式）
-        let mut read_config = config.clone();
-        read_config.connection_mode = ConnectionMode::ReadOnly;
-
+        let write_pool = ConnectionPool::new(write_config.clone(), min_connections, max_connections);
+ 
+        // 预创建最小连接数到写池，保持固定池大小（禁用自动扩容后需手动预热）
+        for _ in 0..min_connections {
+            match BasicClient::new(write_config.clone()).await {
+                Ok(client) => {
+                    // 认证信息将在后续 set_auth 中统一设置；此处直接将客户端放入池中
+                    write_pool.add_connection_to_pool(client).await;
+                }
+                Err(e) => {
+                    log::warn!("预创建写连接失败: {:?}", e);
+                }
+            }
+        }
+ 
         let pool_client = Self {
             write_pool,
             read_client: Arc::new(Mutex::new(None)),
             event_bus: EventBus::global(), // 使用全局事件总线
         };
-
-        // 启动后台连接管理器（只管理写连接池）
-        start_connection_manager_task(pool_client.write_pool.clone(), None).await;
+ 
+        // 不启动后台连接管理器（已禁用自动扩容/缩容，保持固定连接数）
 
         // 初始化只读连接
         pool_client.setup_read_only_connection().await?;
@@ -236,8 +244,8 @@ impl PaintboardClientTrait for PoolClient {
     where
         Self: Sized,
     {
-        // 默认使用最小4个连接，最大7个连接
-        Self::new(config, 2, 7).await
+        // 默认固定为 5 个写连接 (wo)，最大也为 5 个；只读连接由单独的只读客户端维护（1 个 ro）
+        Self::new(config, 5, 5).await
     }
 
     fn set_auth(&mut self, uid: u32, token: String) {
