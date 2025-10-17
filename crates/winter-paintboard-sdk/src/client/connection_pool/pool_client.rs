@@ -266,8 +266,8 @@ impl PaintboardClientTrait for PoolClient {
         let max_attempts = 3;
 
         loop {
-            let client = self.write_pool.acquire().await?;
-            let mut guard = ConnectionGuard::new(client, Arc::new(self.write_pool.clone()));
+            let (client, permit) = self.write_pool.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.write_pool.clone()), permit);
 
             match guard.as_mut().unwrap().get_board().await {
                 Ok(result) => {
@@ -329,8 +329,8 @@ impl PaintboardClientTrait for PoolClient {
         let max_attempts = 3;
 
         loop {
-            let client = self.write_pool.acquire().await?;
-            let mut guard = ConnectionGuard::new(client, Arc::new(self.write_pool.clone()));
+            let (client, permit) = self.write_pool.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.write_pool.clone()), permit);
 
             match guard.as_mut().unwrap().get_token(uid, &access_key).await {
                 Ok(result) => {
@@ -390,8 +390,8 @@ impl PaintboardClientTrait for PoolClient {
         let max_attempts = 3;
 
         loop {
-            let client = self.write_pool.acquire().await?;
-            let mut guard = ConnectionGuard::new(client, Arc::new(self.write_pool.clone()));
+            let (client, permit) = self.write_pool.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.write_pool.clone()), permit);
 
             match guard.as_mut().unwrap().paint(pos, color).await {
                 Ok(result) => {
@@ -453,8 +453,8 @@ impl PaintboardClientTrait for PoolClient {
         let max_attempts = 3;
 
         loop {
-            let client = self.write_pool.acquire().await?;
-            let mut guard = ConnectionGuard::new(client, Arc::new(self.write_pool.clone()));
+            let (client, permit) = self.write_pool.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.write_pool.clone()), permit);
 
             match guard
                 .as_mut()

@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, Semaphore, OwnedSemaphorePermit};
 
 use crate::{config::Config, error::PaintboardError, BasicClient, PaintboardClientTrait};
 
@@ -30,14 +30,16 @@ use crate::client::connection_pool::pool_client::PoolMetrics;
 pub struct ConnectionGuard {
     connection: Option<BasicClient>,
     pool: Arc<ConnectionPool>,
+    _permit: OwnedSemaphorePermit,
     broken: bool,
 }
 
 impl ConnectionGuard {
-    pub fn new(connection: BasicClient, pool: Arc<ConnectionPool>) -> Self {
+    pub fn new(connection: BasicClient, pool: Arc<ConnectionPool>, permit: OwnedSemaphorePermit) -> Self {
         Self {
             connection: Some(connection),
             pool,
+            _permit: permit,
             broken: false,
         }
     }
@@ -194,11 +196,10 @@ impl ConnectionPool {
     }
 
     // 获取一个连接，带有负载均衡
-    pub async fn acquire(&self) -> Result<BasicClient, PaintboardError> {
+    pub async fn acquire(&self) -> Result<(BasicClient, OwnedSemaphorePermit), PaintboardError> {
         // 创建信号量许可以确保不超过最大连接数
-        let _permit = self
-            .semaphore
-            .acquire()
+        let permit = Arc::clone(&self.semaphore)
+            .acquire_owned()
             .await
             .map_err(|_| PaintboardError::ConnectionClosed)?;
 
@@ -209,7 +210,8 @@ impl ConnectionPool {
             if pool_item.is_broken {
                 // 连接已损坏，丢弃并创建新连接
                 drop(pool_guard);
-                return self.create_new_connection().await;
+                let client = self.create_new_connection().await?;
+                return Ok((client, permit));
             }
 
             // 健康检查：在返回连接前验证其状态
@@ -224,7 +226,8 @@ impl ConnectionPool {
             if !self.is_connection_healthy(&mut client).await {
                 // 连接不健康，丢弃并创建新连接
                 drop(pool_guard);
-                return self.create_new_connection().await;
+                let client = self.create_new_connection().await?;
+                return Ok((client, permit));
             }
 
             // 更新连接使用情况
@@ -238,7 +241,7 @@ impl ConnectionPool {
             self.increment_usage_count().await;
 
             drop(pool_guard);
-            Ok(client)
+            Ok((client, permit))
         } else {
             drop(pool_guard);
             // 如果池中没有连接，创建新连接
@@ -255,7 +258,7 @@ impl ConnectionPool {
             }
             self.increment_created_count().await;
 
-            Ok(client)
+            Ok((client, permit))
         }
     }
 
@@ -272,25 +275,29 @@ impl ConnectionPool {
         // 增加释放连接计数
         self.increment_released_count(is_broken).await;
 
-        // 释放信号量许可
-        drop(self.semaphore.acquire().await);
+        // 只有在连接健康且池中连接数低于 min_connections 时才归还。
+        // 损坏的连接始终丢弃，以节省资源并保证池健康。
+        if !is_broken {
+            let mut pool_guard = self.pool.lock().await;
 
-        let mut pool_guard = self.pool.lock().await;
-        if pool_guard.len() < self.max_connections && !is_broken {
-            // 确保连接有认证信息
-            if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
-                client.set_auth(uid, token.clone());
+            // 如果池中的连接数少于最小期望数量，则将连接归还到池中；否则丢弃连接
+            if pool_guard.len() < self.min_connections {
+                // 确保连接有认证信息
+                if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
+                    client.set_auth(uid, token.clone());
+                }
+
+                let pool_item = PoolItem {
+                    client,
+                    last_used: Instant::now(),
+                    usage_count: 0,
+                    is_broken: false,
+                };
+                pool_guard.push_back(pool_item);
             }
-
-            let pool_item = PoolItem {
-                client,
-                last_used: Instant::now(),
-                usage_count: 0, // 归还时重置使用次数以便重新计算
-                is_broken: false,
-            };
-            pool_guard.push_back(pool_item);
+            // 否则池已达到或超过 min_connections，丢弃额外连接以节省资源
         }
-        // 否则丢弃连接
+        // 损坏的连接直接丢弃
     }
 
     /// 创建新连接 (供后台管理器使用)
@@ -388,8 +395,8 @@ impl ConnectionPool {
         let max_attempts = 3;
 
         loop {
-            let client = self.acquire().await?;
-            let mut guard = ConnectionGuard::new(client, Arc::new(self.clone()));
+            let (client, permit) = self.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.clone()), permit);
 
             match operation.clone()(guard.as_mut().unwrap()) {
                 // 使用 clone() 来获取每次迭代的副本
@@ -446,8 +453,8 @@ impl ConnectionPool {
         let max_attempts = 3;
 
         loop {
-            let client = self.acquire().await?;
-            let mut guard = ConnectionGuard::new(client, Arc::new(self.clone())); // 修复: 使用 Arc::new()
+            let (client, permit) = self.acquire().await?;
+            let mut guard = ConnectionGuard::new(client, Arc::new(self.clone()), permit);
 
             match operation(guard.as_mut().unwrap()).await {
                 Ok(result) => {
@@ -668,8 +675,8 @@ where
     let max_attempts = 3;
 
     loop {
-        let client = match pool.acquire().await {
-            Ok(client) => client,
+        let (client, _permit) = match pool.acquire().await {
+            Ok((client, permit)) => (client, permit),
             Err(e) => return Err(e),
         };
 
