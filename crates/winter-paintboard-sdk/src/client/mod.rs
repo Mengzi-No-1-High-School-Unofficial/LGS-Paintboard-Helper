@@ -3,29 +3,29 @@
 
 #[macro_use]
 mod connection_pool;
-mod http_client;
-mod ws_provider;
 mod batch_client;
-mod paintboard_client_trait;
 mod factory;
+mod http_client;
+mod paintboard_client_trait;
+mod ws_provider;
 
-/// 导出 HTTP 客户端提供者。
-pub use http_client::HttpProvider;
-/// 导出 WebSocket 客户端提供者。
-pub use ws_provider::WsProvider;
 /// 导出批量操作助手。
 pub use batch_client::BatchHelper;
+/// 从连接池模块导出连接池客户端、连接守卫、连接池指标和监控任务启动函数。
+pub use connection_pool::{start_monitoring_task, ConnectionGuard, PoolClient, PoolMetrics};
+/// 从工厂模块导出客户端类型枚举和客户端创建工厂函数。
+pub use factory::{create_client_by_type, ClientType};
+/// 导出 HTTP 客户端提供者。
+pub use http_client::HttpProvider;
 /// 导出 Paintboard 客户端的 trait 定义。
 pub use paintboard_client_trait::PaintboardClientTrait;
-/// 从连接池模块导出连接池客户端、连接守卫、连接池指标和监控任务启动函数。
-pub use connection_pool::{PoolClient, ConnectionGuard, PoolMetrics, start_monitoring_task};
-/// 从工厂模块导出客户端类型枚举和客户端创建工厂函数。
-pub use factory::{ClientType, create_client_by_type};
+/// 导出 WebSocket 客户端提供者。
+pub use ws_provider::WsProvider;
 
 use crate::{
+    config::Config,
     error::PaintboardError,
-    models::{Board, Rgb, Pos},
-    config::Config
+    models::{Board, Pos, Rgb},
 };
 use std::sync::Arc;
 
@@ -57,7 +57,7 @@ impl BasicClient {
     pub async fn new_impl(config: Config) -> Result<Self, PaintboardError> {
         let config = Arc::new(config);
         let http_client = HttpProvider::new(config.clone())?;
-        
+
         Ok(Self {
             http_client,
             ws_client: None,
@@ -93,7 +93,11 @@ impl BasicClient {
     ///
     /// # 返回
     /// `Result`，成功时包含认证令牌字符串，失败时包含 `PaintboardError`。
-    pub async fn get_token_impl(&self, uid: u32, access_key: &str) -> Result<String, PaintboardError> {
+    pub async fn get_token_impl(
+        &self,
+        uid: u32,
+        access_key: &str,
+    ) -> Result<String, PaintboardError> {
         self.http_client.get_token(uid, access_key).await
     }
 
@@ -106,19 +110,23 @@ impl BasicClient {
     ///
     /// # 返回
     /// `Result`，成功时包含 `PaintResult`，失败时包含 `PaintboardError`。
-    pub async fn paint_impl(&mut self, pos: Pos, color: Rgb) -> Result<crate::models::PaintResult, PaintboardError> {
+    pub async fn paint_impl(
+        &mut self,
+        pos: Pos,
+        color: Rgb,
+    ) -> Result<crate::models::PaintResult, PaintboardError> {
         // Initialize WebSocket client if not already created
         if self.ws_client.is_none() {
             let mut ws_client = WsProvider::new(self.config.clone()).await?;
-            
+
             // Set authentication if available
             if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
                 ws_client.set_auth(uid, token.clone());
             }
-            
+
             self.ws_client = Some(ws_client);
         }
-        
+
         // Get a mutable reference to the WebSocket client and call paint
         if let Some(ref mut ws_client) = self.ws_client {
             ws_client.paint(pos, color).await
@@ -136,19 +144,22 @@ impl BasicClient {
     ///
     /// # 返回
     /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
-    pub async fn paint_batch_impl(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
+    pub async fn paint_batch_impl(
+        &mut self,
+        operations: Vec<(Pos, Rgb)>,
+    ) -> Result<(), PaintboardError> {
         // Initialize WebSocket client if not already created
         if self.ws_client.is_none() {
             let mut ws_client = WsProvider::new(self.config.clone()).await?;
-            
+
             // Set authentication if available
             if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
                 ws_client.set_auth(uid, token.clone());
             }
-            
+
             self.ws_client = Some(ws_client);
         }
-        
+
         // Get a mutable reference to the WebSocket client and call paint_batch
         if let Some(ref mut ws_client) = self.ws_client {
             ws_client.paint_batch(operations).await
@@ -170,7 +181,7 @@ impl PaintboardClientTrait for BasicClient {
     /// `Result`，成功时包含客户端实例，失败时包含 `PaintboardError`。
     async fn new(config: Config) -> Result<Self, PaintboardError>
     where
-        Self: Sized
+        Self: Sized,
     {
         Self::new_impl(config).await
     }
@@ -212,7 +223,11 @@ impl PaintboardClientTrait for BasicClient {
     ///
     /// # 返回
     /// `Result`，成功时包含 `PaintResult`，失败时包含 `PaintboardError`。
-    async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<crate::models::PaintResult, PaintboardError> {
+    async fn paint(
+        &mut self,
+        pos: Pos,
+        color: Rgb,
+    ) -> Result<crate::models::PaintResult, PaintboardError> {
         self.paint_impl(pos, color).await
     }
 

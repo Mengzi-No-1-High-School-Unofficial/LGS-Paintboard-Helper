@@ -1,7 +1,7 @@
 use crate::{
-    error::PaintboardError, 
-    models::{Rgb, Pos}, 
-    config::Config
+    config::Config,
+    error::PaintboardError,
+    models::{Pos, Rgb},
 };
 use std::sync::Arc;
 use tokio::time::timeout;
@@ -26,13 +26,15 @@ impl BatchHelper {
         if self.operations.len() >= self.config.max_batch_size {
             return Err(PaintboardError::rate_limit());
         }
-        
+
         self.operations.push((pos, color));
         Ok(())
     }
 
     /// Execute all operations in the batch
-    pub async fn execute_batch(&mut self) -> Result<Vec<crate::models::PaintResult>, PaintboardError> {
+    pub async fn execute_batch(
+        &mut self,
+    ) -> Result<Vec<crate::models::PaintResult>, PaintboardError> {
         let operations = std::mem::take(&mut self.operations);
         let mut results = Vec::new();
 
@@ -40,7 +42,7 @@ impl BatchHelper {
         // 1. Combine operations into fewer network requests
         // 2. Handle rate limiting
         // 3. Process responses
-        
+
         // For now, just return dummy results
         for i in 0..operations.len() {
             results.push(crate::models::PaintResult {
@@ -54,13 +56,12 @@ impl BatchHelper {
     }
 
     /// Execute batch with timeout
-    pub async fn execute_batch_with_timeout(&mut self) -> Result<Vec<crate::models::PaintResult>, PaintboardError> {
-        timeout(
-            self.config.batch_timeout,
-            self.execute_batch()
-        )
-        .await
-        .map_err(|_| PaintboardError::Timeout)?
+    pub async fn execute_batch_with_timeout(
+        &mut self,
+    ) -> Result<Vec<crate::models::PaintResult>, PaintboardError> {
+        timeout(self.config.batch_timeout, self.execute_batch())
+            .await
+            .map_err(|_| PaintboardError::Timeout)?
     }
 
     /// Get the number of pending operations

@@ -1,7 +1,7 @@
 use crate::{
-    error::PaintboardError, 
-    models::{Board, Rgb, Pos, PaintResult}, 
-    config::Config
+    config::Config,
+    error::PaintboardError,
+    models::{Board, PaintResult, Pos, Rgb},
 };
 use async_trait::async_trait;
 

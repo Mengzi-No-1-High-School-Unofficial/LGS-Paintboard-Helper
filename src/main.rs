@@ -1,11 +1,11 @@
 //! Main entry point for the Winter Paintboard Helper application
-//! 
+//!
 //! This application is a command-line tool for drawing images on the Luogu Paintboard.
 //! It supports multiple drawing modes including incremental, loop, and one-time drawing.
 
 use clap::Parser;
-use tracing_subscriber;
 use tracing::info;
+use tracing_subscriber;
 
 /// Application module containing all the core functionality
 mod app;

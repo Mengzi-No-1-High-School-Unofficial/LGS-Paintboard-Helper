@@ -26,7 +26,7 @@ impl Rgb {
     pub fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
-    
+
     /// 将 `Rgb` 颜色转换为 RGB 顺序的字节数组。
     ///
     /// # 返回
@@ -34,7 +34,7 @@ impl Rgb {
     pub fn to_bytes(&self) -> [u8; 3] {
         [self.r, self.g, self.b]
     }
-    
+
     /// 从字节切片创建 `Rgb` 颜色。
     ///
     /// 要求字节切片至少包含 3 个字节。
@@ -47,7 +47,9 @@ impl Rgb {
     /// 失败时包含 `PaintboardError::InvalidData`。
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PaintboardError> {
         if bytes.len() < 3 {
-            return Err(PaintboardError::invalid_data("Not enough bytes for RGB color"));
+            return Err(PaintboardError::invalid_data(
+                "Not enough bytes for RGB color",
+            ));
         }
         Ok(Self {
             r: bytes[0],
@@ -84,7 +86,7 @@ impl Pos {
         }
         Ok(Self { x, y })
     }
-    
+
     /// 将 `Pos` 坐标转换为小端字节数组。
     ///
     /// 格式为 `[x_byte_0, x_byte_1, y_byte_0, y_byte_1]`。
@@ -97,7 +99,7 @@ impl Pos {
         bytes[2..4].copy_from_slice(&self.y.to_le_bytes());
         bytes
     }
-    
+
     /// 从小端字节切片创建 `Pos` 坐标。
     ///
     /// 要求字节切片至少包含 4 个字节。
@@ -110,10 +112,12 @@ impl Pos {
     /// 失败时包含 `PaintboardError::InvalidData` 或 `PaintboardError::InvalidCoordinate`。
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PaintboardError> {
         if bytes.len() < 4 {
-            return Err(PaintboardError::invalid_data("Not enough bytes for position"));
+            return Err(PaintboardError::invalid_data(
+                "Not enough bytes for position",
+            ));
         }
         let x = u16::from_le_bytes([bytes[0], bytes[1]]);
         let y = u16::from_le_bytes([bytes[2], bytes[3]]);
-        Self::new(x, y)  // This will validate the coordinates
+        Self::new(x, y) // This will validate the coordinates
     }
 }

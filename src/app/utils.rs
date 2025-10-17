@@ -1,5 +1,5 @@
 use log::info;
-use winter_paintboard_sdk::{BasicClient, PaintboardClientTrait, config::Config};
+use winter_paintboard_sdk::{config::Config, BasicClient, PaintboardClientTrait};
 
 /// Gets a token using UID and access key
 pub async fn get_token_with_access_key(
@@ -15,23 +15,26 @@ pub async fn get_token_with_access_key(
 }
 
 /// Validates that either token or access key is provided
-pub fn validate_auth_args(token: &Option<String>, access_key: &Option<String>) -> Result<String, &'static str> {
+pub fn validate_auth_args(
+    token: &Option<String>,
+    access_key: &Option<String>,
+) -> Result<String, &'static str> {
     if let Some(access_key) = access_key {
         if access_key.is_empty() {
             return Err("Access key cannot be empty");
         }
     }
-    
+
     if let Some(token) = token {
         if token.is_empty() {
             return Err("Token cannot be empty");
         }
         return Ok(token.clone());
     }
-    
+
     if access_key.is_some() {
         return Ok(String::new()); // Will be obtained later
     }
-    
+
     Err("必须提供 --token 或 --access-key")
 }

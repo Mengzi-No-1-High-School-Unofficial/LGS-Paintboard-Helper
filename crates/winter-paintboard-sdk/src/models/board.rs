@@ -53,7 +53,7 @@ impl Board {
             data: vec![0; 1000 * 600 * 3], // 1,800,000 bytes
         }
     }
-    
+
     /// 从原始 RGB 字节向量创建一个画板。
     ///
     /// 传入的字节向量长度必须与画板尺寸 (1000x600x3) 匹配，否则会触发 `assert_eq!` 宏的 panic。
@@ -67,15 +67,19 @@ impl Board {
     /// # Panics
     /// 如果 `bytes` 的长度不为 `1_800_000`，则会 panic。
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
-        assert_eq!(bytes.len(), 1_800_000, "Board data must be exactly 1,800,000 bytes (1000x600x3)");
-        
+        assert_eq!(
+            bytes.len(),
+            1_800_000,
+            "Board data must be exactly 1,800,000 bytes (1000x600x3)"
+        );
+
         Self {
             width: 1000,
             height: 600,
             data: bytes,
         }
     }
-    
+
     /// 获取画板上指定位置 (x, y) 像素的颜色。
     ///
     /// # 参数
@@ -89,19 +93,22 @@ impl Board {
         if x >= self.width || y >= self.height {
             return Err(PaintboardError::invalid_coordinate(x as i32, y as i32));
         }
-        
+
         let index = (y as usize * self.width as usize + x as usize) * 3;
         if index + 2 >= self.data.len() {
-            return Err(PaintboardError::index_out_of_range(index + 2, self.data.len()));
+            return Err(PaintboardError::index_out_of_range(
+                index + 2,
+                self.data.len(),
+            ));
         }
-        
+
         Ok(Pixel {
             r: self.data[index],
             g: self.data[index + 1],
             b: self.data[index + 2],
         })
     }
-    
+
     /// 设置画板上指定位置 (x, y) 像素的颜色。
     ///
     /// # 参数
@@ -116,19 +123,22 @@ impl Board {
         if x >= self.width || y >= self.height {
             return Err(PaintboardError::invalid_coordinate(x as i32, y as i32));
         }
-        
+
         let index = (y as usize * self.width as usize + x as usize) * 3;
         if index + 2 >= self.data.len() {
-            return Err(PaintboardError::index_out_of_range(index + 2, self.data.len()));
+            return Err(PaintboardError::index_out_of_range(
+                index + 2,
+                self.data.len(),
+            ));
         }
-        
+
         self.data[index] = pixel.r;
         self.data[index + 1] = pixel.g;
         self.data[index + 2] = pixel.b;
-        
+
         Ok(())
     }
-    
+
     /// 获取画板的原始 RGB 字节切片。
     ///
     /// # 返回
@@ -136,7 +146,7 @@ impl Board {
     pub fn as_bytes(&self) -> &[u8] {
         &self.data
     }
-    
+
     /// 将画板转换为一个二维像素向量，方便按行和列访问像素。
     ///
     /// # 返回
@@ -182,7 +192,7 @@ mod tests {
     fn test_set_get_pixel() {
         let mut board = Board::new();
         let pixel = Pixel::new(255, 128, 64);
-        
+
         assert!(board.set_pixel(100, 50, pixel).is_ok());
         let retrieved = board.get_pixel(100, 50).unwrap();
         assert_eq!(retrieved, pixel);
@@ -191,11 +201,11 @@ mod tests {
     #[test]
     fn test_invalid_coordinates() {
         let board = Board::new();
-        
+
         // Test X out of bounds
         assert!(board.get_pixel(1000, 0).is_err());
         assert!(board.get_pixel(1001, 0).is_err());
-        
+
         // Test Y out of bounds
         assert!(board.get_pixel(0, 600).is_err());
         assert!(board.get_pixel(0, 601).is_err());

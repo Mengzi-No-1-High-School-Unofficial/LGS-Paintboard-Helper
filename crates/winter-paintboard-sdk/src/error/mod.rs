@@ -8,11 +8,11 @@ pub enum ProtocolViolation {
     /// 收到意外的 Pong 响应。
     #[error("协议违规: 收到意外的Pong响应")]
     UnexpectedPong,
-    
+
     /// 遇到未知的数据包类型。
     #[error("协议违规: 遇到未知的数据包类型")]
     UnknownPacketType,
-    
+
     /// 检测到重复的 Ping 状态。
     #[error("协议违规: 检测到重复的Ping状态")]
     DuplicatePingState,
@@ -50,67 +50,67 @@ pub enum PaintboardError {
     /// 网络错误，包含详细描述。
     #[error("网络错误: {0}")]
     Network(String),
-    
+
     /// WebSocket 连接错误。
     #[error("WebSocket错误: {0}")]
     WebSocket(String),
-    
+
     /// JSON 解析错误。
     #[error("JSON解析错误: {0}")]
     JsonParse(String),
-    
+
     /// 提供的坐标无效。
     #[error("无效的坐标: x={x}, y={y}")]
     InvalidCoordinate { x: i32, y: i32 },
-    
+
     /// 访问的索引超出了有效范围。
     #[error("索引越界: 当前={current}, 最大={max}")]
     IndexOutOfRange { current: usize, max: usize },
-    
+
     /// 数据格式不正确。
     #[error("数据格式错误: {0}")]
     InvalidData(String),
-    
+
     /// HTTP 请求返回了错误状态码。
     #[error("HTTP错误: 状态码 {0}")]
     Http(u16),
-    
+
     /// 提供的 URL 无效。
     #[error("无效的URL: {0}")]
     InvalidUrl(String),
-    
+
     /// 客户端在使用前未进行初始化。
     #[error("客户端未正确初始化")]
     ClientNotInitialized,
-    
+
     /// 操作超时。
     #[error("操作超时")]
     Timeout,
-    
+
     /// 认证失败。
     #[error("认证失败: {0}")]
     Auth(String),
-    
+
     /// 请求频率超过了速率限制。
     #[error("超过速率限制: 请求过于频繁")]
     RateLimit,
-    
+
     /// 连接已关闭，无法执行操作。
     #[error("连接已关闭")]
     ConnectionClosed,
-    
+
     /// 响应通道已关闭，无法接收响应。
     #[error("响应通道已关闭")]
     ResponseChannelClosed,
-    
+
     /// SDK 内部发生的错误。
     #[error("内部错误: {0}")]
     Internal(String),
-    
+
     /// 协议违规错误，由 `ProtocolViolation` 转换而来。
     #[error("协议违规: {0}")]
     ProtocolViolation(#[from] ProtocolViolation),
-    
+
     /// WebSocket 连接因特定关闭码而关闭。
     #[error("连接因 {0} 关闭: {1}")]
     ConnectionClosedWithCode(u16, String),

@@ -1,5 +1,3 @@
-
-
 //! `config` 模块定义了 Winter Paintboard SDK 的各种配置选项。
 
 /// WebSocket 连接模式。

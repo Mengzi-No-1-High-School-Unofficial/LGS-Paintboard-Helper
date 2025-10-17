@@ -2,25 +2,25 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time;
 
-use super::{PoolMetrics, ConnectionPool};
+use super::{ConnectionPool, PoolMetrics};
 
 // 业务层监控任务
 pub async fn start_monitoring_task(
-    metrics: Arc<Mutex<PoolMetrics>>, 
-    interval: std::time::Duration
+    metrics: Arc<Mutex<PoolMetrics>>,
+    interval: std::time::Duration,
 ) {
     tokio::spawn(async move {
         let mut interval = time::interval(interval);
-        
+
         loop {
             interval.tick().await;
-            
+
             // 从共享的Arc<Mutex<PoolMetrics>>中获取最新数据
             let metrics_snapshot = {
                 let m = metrics.lock().await;
-                m.clone()  // 这里只需要克隆快照，而不是频繁操作原数据
+                m.clone() // 这里只需要克隆快照，而不是频繁操作原数据
             };
-            
+
             print_metrics(&metrics_snapshot);
         }
     });
@@ -29,7 +29,10 @@ pub async fn start_monitoring_task(
 // 打印监控数据的函数
 fn print_metrics(metrics: &PoolMetrics) {
     println!("=== Connection Pool 监控数据 ===");
-    println!("池中连接数: {}/{}", metrics.pool_size, metrics.max_connections);
+    println!(
+        "池中连接数: {}/{}",
+        metrics.pool_size, metrics.max_connections
+    );
     println!("活跃连接数: {}", metrics.active_count);
     println!("总请求数: {}", metrics.total_requests);
     println!("总发包数: {}", metrics.total_packets);
@@ -49,7 +52,7 @@ impl ConnectionPool {
     pub fn metrics(&self) -> Arc<Mutex<PoolMetrics>> {
         Arc::clone(&self.metrics)
     }
-    
+
     // 获取实时监控数据
     pub async fn get_metrics(&self) -> PoolMetrics {
         let mut metrics = self.metrics().lock().await.clone();
