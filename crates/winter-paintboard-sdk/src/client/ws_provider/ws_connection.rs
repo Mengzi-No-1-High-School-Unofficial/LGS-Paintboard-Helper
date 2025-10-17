@@ -32,12 +32,25 @@ impl WsConnection {
 
     /// 建立连接并替换当前连接（如果成功）
     pub async fn connect(&self) -> Result<(), PaintboardError> {
-        debug!("尝试连接到 WebSocket: {}", self.config.ws_url);
-        let url = Url::parse(&self.config.ws_url).map_err(|e| {
+        let mut url = Url::parse(&self.config.ws_url).map_err(|e| {
             debug!("URL 解析失败: {}", e);
             PaintboardError::InvalidUrl(e.to_string())
         })?;
 
+        // 根据连接模式添加查询参数
+        match self.config.connection_mode {
+            crate::config::ConnectionMode::ReadOnly => {
+                url.set_query(Some("readonly=1"));
+            }
+            crate::config::ConnectionMode::WriteOnly => {
+                url.set_query(Some("writeonly=1"));
+            }
+            crate::config::ConnectionMode::ReadWrite => {
+                // 默认模式，不需要参数
+            }
+        }
+
+        debug!("连接到 WebSocket: {}", url);
         match connect_async(url).await {
             Ok((ws_stream, _)) => {
                 debug!("WebSocket 连接建立成功");

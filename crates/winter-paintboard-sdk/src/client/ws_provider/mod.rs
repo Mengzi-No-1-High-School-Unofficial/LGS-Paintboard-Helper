@@ -24,6 +24,9 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio::time::{timeout, Duration};
 use tokio::task::JoinHandle;
 
+/// 最大包大小 (32 KB)
+const MAX_PACKET_SIZE: usize = 32 * 1024; // 32 KB
+
 /// Refactored WebSocket provider for Winter Paintboard API
 pub struct WsProvider {
     config: Arc<Config>,
@@ -199,6 +202,19 @@ impl WsProvider {
         };
 
         let binary_data = operation.to_binary();
+
+        // 单次绘图大小检查（理论上不会超过，但为完整性添加）
+        if binary_data.len() > MAX_PACKET_SIZE {
+            return Err(PaintboardError::invalid_data(
+                format!(
+                    "绘图消息大小 {} 字节超过限制 {} 字节 ({}KB)",
+                    binary_data.len(),
+                    MAX_PACKET_SIZE,
+                    MAX_PACKET_SIZE / 1024
+                )
+            ));
+        }
+
         trace!(
             "绘图操作二进制数据长度: {}, 前几个字节: {:?}",
             binary_data.len(),
@@ -268,6 +284,18 @@ impl WsProvider {
                 paint_id: paint_id as u32,
             };
             all_binary.extend(op.to_binary());
+        }
+
+        // 检查批量包大小，避免触发服务端 1009 (Message too big)
+        if all_binary.len() > MAX_PACKET_SIZE {
+            return Err(PaintboardError::invalid_data(
+                format!(
+                    "批量包大小 {} 字节超过限制 {} 字节 ({}KB)",
+                    all_binary.len(),
+                    MAX_PACKET_SIZE,
+                    MAX_PACKET_SIZE / 1024
+                )
+            ));
         }
 
         if !self.connection.is_connected().await {
