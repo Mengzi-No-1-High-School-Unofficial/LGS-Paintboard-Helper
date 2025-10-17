@@ -1,9 +1,5 @@
 use crate::{
-    error::PaintboardError, 
-    config::Config,
-    BasicClient,
-    PaintboardClientTrait,
-    PoolClient,
+    config::Config, error::PaintboardError, BasicClient, PaintboardClientTrait, PoolClient,
 };
 use async_trait::async_trait;
 
@@ -15,7 +11,10 @@ pub enum ClientType {
 }
 
 /// 便捷函数：根据类型创建客户端
-pub async fn create_client_by_type(config: Config, client_type: ClientType) -> Result<Box<dyn PaintboardClientTrait + Send>, PaintboardError> {
+pub async fn create_client_by_type(
+    config: Config,
+    client_type: ClientType,
+) -> Result<Box<dyn PaintboardClientTrait + Send>, PaintboardError> {
     match client_type {
         ClientType::Basic => {
             let client = BasicClient::new(config).await?;

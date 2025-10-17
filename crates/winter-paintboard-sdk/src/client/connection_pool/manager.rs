@@ -1,11 +1,11 @@
+use log::{debug, info, warn};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
-use log::{info, debug, warn};
 
+use super::pool::ConnectionPool;
 use crate::config::Config;
-use super::pool::{ConnectionPool};
 use crate::error::PaintboardError;
 
 /// 连接池管理器配置
@@ -26,11 +26,11 @@ pub struct PoolManagerConfig {
 impl Default for PoolManagerConfig {
     fn default() -> Self {
         Self {
-            monitor_interval: Duration::from_secs(5),      // 每5秒检查一次
-            scale_up_threshold: 0.8,                       // 活跃率超过80%扩容
-            scale_down_threshold: 0.3,                     // 活跃率低于30%缩容
-            idle_timeout: Duration::from_secs(300),        // 5分钟无使用则回收
-            warmup_ratio: 0.2,                            // 预热20%额外连接
+            monitor_interval: Duration::from_secs(5), // 每5秒检查一次
+            scale_up_threshold: 0.8,                  // 活跃率超过80%扩容
+            scale_down_threshold: 0.3,                // 活跃率低于30%缩容
+            idle_timeout: Duration::from_secs(300),   // 5分钟无使用则回收
+            warmup_ratio: 0.2,                        // 预热20%额外连接
         }
     }
 }
@@ -57,10 +57,10 @@ impl PoolManager {
         let pool = self.pool.clone();
         let config = self.config.clone();
         let cancellation_token = self.cancellation_token.clone();
-        
+
         tokio::spawn(async move {
             let mut interval = interval(config.monitor_interval);
-            
+
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
@@ -78,10 +78,13 @@ impl PoolManager {
     }
 
     /// 管理连接池的主要逻辑
-    async fn manage_connections(pool: &ConnectionPool, config: &PoolManagerConfig) -> Result<(), PaintboardError> {
+    async fn manage_connections(
+        pool: &ConnectionPool,
+        config: &PoolManagerConfig,
+    ) -> Result<(), PaintboardError> {
         let (pool_size, active_count) = pool.get_pool_stats().await;
         let total_connections = pool_size + active_count;
-        
+
         if total_connections == 0 && pool.max_connections > 0 {
             // 如果连接池为空，且允许创建连接，尝试创建最小连接数
             for _ in 0..pool.min_connections {
@@ -96,15 +99,30 @@ impl PoolManager {
             0.0
         };
 
-        debug!("连接池状态 - 池中: {}, 活跃: {}, 总计: {}, 使用率: {:.2}%",
-               pool_size, active_count, total_connections, utilization_rate * 100.0);
+        debug!(
+            "连接池状态 - 池中: {}, 活跃: {}, 总计: {}, 使用率: {:.2}%",
+            pool_size,
+            active_count,
+            total_connections,
+            utilization_rate * 100.0
+        );
 
         // 检查是否需要扩容
-        if Self::should_scale_up(utilization_rate, pool_size, pool.min_connections, pool.max_connections) {
+        if Self::should_scale_up(
+            utilization_rate,
+            pool_size,
+            pool.min_connections,
+            pool.max_connections,
+        ) {
             Self::scale_up(pool, config).await;
         }
         // 检查是否需要缩容
-        else if Self::should_scale_down(utilization_rate, pool_size, pool.min_connections, pool.max_connections) {
+        else if Self::should_scale_down(
+            utilization_rate,
+            pool_size,
+            pool.min_connections,
+            pool.max_connections,
+        ) {
             Self::scale_down(pool, config).await;
         }
 
@@ -115,10 +133,18 @@ impl PoolManager {
     }
 
     /// 判断是否需要扩容
-    fn should_scale_up(utilization_rate: f64, current_pool_size: usize, min_connections: usize, max_connections: usize) -> bool {
+    fn should_scale_up(
+        utilization_rate: f64,
+        current_pool_size: usize,
+        min_connections: usize,
+        max_connections: usize,
+    ) -> bool {
         // 如果池中连接数少于最小连接数，需要扩容
         if current_pool_size < min_connections {
-            info!("池中连接数({})少于最小连接数({})，需要扩容", current_pool_size, min_connections);
+            info!(
+                "池中连接数({})少于最小连接数({})，需要扩容",
+                current_pool_size, min_connections
+            );
             return true;
         }
 
@@ -132,7 +158,12 @@ impl PoolManager {
     }
 
     /// 判断是否需要缩容
-    fn should_scale_down(utilization_rate: f64, current_pool_size: usize, min_connections: usize, max_connections: usize) -> bool {
+    fn should_scale_down(
+        utilization_rate: f64,
+        current_pool_size: usize,
+        min_connections: usize,
+        max_connections: usize,
+    ) -> bool {
         // 只有当前池中连接数大于最小连接数时才考虑缩容
         if current_pool_size <= min_connections {
             return false;
@@ -159,17 +190,19 @@ impl PoolManager {
         } else {
             // 基于活跃连接数和预热比例计算需要的额外连接
             let extra_needed = (active_count as f64 * config.warmup_ratio) as usize;
-            let target_pool_size = std::cmp::min(
-                pool.max_connections, 
-                pool.min_connections + extra_needed
-            );
+            let target_pool_size =
+                std::cmp::min(pool.max_connections, pool.min_connections + extra_needed);
             target_pool_size.saturating_sub(current_pool_size)
         };
 
         if needed_connections > 0 {
-            let actual_created = std::cmp::min(needed_connections, pool.max_connections - current_pool_size);
+            let actual_created =
+                std::cmp::min(needed_connections, pool.max_connections - current_pool_size);
             if actual_created > 0 {
-                info!("开始扩容: 池中当前{}个连接，计划创建{}个新连接", current_pool_size, actual_created);
+                info!(
+                    "开始扩容: 池中当前{}个连接，计划创建{}个新连接",
+                    current_pool_size, actual_created
+                );
 
                 // 创建新的连接并放入池中
                 for i in 0..actual_created {
@@ -203,11 +236,15 @@ impl PoolManager {
         }
 
         // 计算可以安全回收的连接数
-        let connections_to_keep = std::cmp::max(min_connections, (current_pool_size as f64 * 0.7) as usize);
+        let connections_to_keep =
+            std::cmp::max(min_connections, (current_pool_size as f64 * 0.7) as usize);
         let connections_to_remove = current_pool_size.saturating_sub(connections_to_keep);
-        
+
         if connections_to_remove > 0 {
-            info!("开始缩容: 当前池中{}个连接，计划回收{}个连接", current_pool_size, connections_to_remove);
+            info!(
+                "开始缩容: 当前池中{}个连接，计划回收{}个连接",
+                current_pool_size, connections_to_remove
+            );
 
             // 实际回收连接（通过清理闲置连接实现）
             pool.cleanup_inactive_connections(config.idle_timeout).await;
@@ -226,7 +263,10 @@ impl PoolManager {
 }
 
 /// 便捷函数：启动连接池管理任务
-pub async fn start_connection_manager_task(pool: ConnectionPool, config: Option<PoolManagerConfig>) {
+pub async fn start_connection_manager_task(
+    pool: ConnectionPool,
+    config: Option<PoolManagerConfig>,
+) {
     let config = config.unwrap_or_else(|| PoolManagerConfig::default());
     let manager = PoolManager::new(pool, config);
     manager.start().await;

@@ -30,14 +30,14 @@ pub async fn draw_image_to_paintboard(
     processed_image_data: ProcessedImageData,
     progressive_mode: &ProgressiveMode,
     max_batch_size: usize,
-    delay: u64
+    delay: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     draw_image_to_paintboard_with_client(
         client,
         &processed_image_data,
         progressive_mode,
         max_batch_size,
-        delay
+        delay,
     )
     .await
 }
@@ -51,9 +51,12 @@ pub async fn draw_image_to_paintboard_with_client(
     delay: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match progressive_mode {
-        ProgressiveMode::Chessboard => {},
+        ProgressiveMode::Chessboard => {}
         _ => {
-            warn!("当前系统仅支持 Chessboard 渐近模式！{:?} 将被回退到到 Chessboard 模式", progressive_mode)
+            warn!(
+                "当前系统仅支持 Chessboard 渐近模式！{:?} 将被回退到到 Chessboard 模式",
+                progressive_mode
+            )
         }
     }
 

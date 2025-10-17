@@ -1,6 +1,6 @@
-use crate::models::{Rgb, Pos};
-use tokio::sync::broadcast;
+use crate::models::{Pos, Rgb};
 use std::sync::{Arc, OnceLock};
+use tokio::sync::broadcast;
 
 /// Winter Paintboard SDK 的事件类型。
 /// 这些事件由客户端发出或接收，用于通知应用程序状态变化。
@@ -31,7 +31,7 @@ impl Event {
     pub fn own_paint_event(pos: Pos, color: Rgb) -> Self {
         Event::OwnPaintEvent { pos, color }
     }
-    
+
     /// 创建一个表示其他客户端绘图的事件。
     ///
     /// # 参数
@@ -40,7 +40,7 @@ impl Event {
     pub fn other_paint_event(pos: Pos, color: Rgb) -> Self {
         Event::OtherPaintEvent { pos, color }
     }
-    
+
     /// 保持向后兼容性，将 `paint_event` 映射为 `OtherPaintEvent`。
     ///
     /// # 参数
@@ -49,7 +49,7 @@ impl Event {
     pub fn paint_event(pos: Pos, color: Rgb) -> Self {
         Event::OtherPaintEvent { pos, color }
     }
-    
+
     /// 创建一个表示发生错误的事件。
     ///
     /// # 参数
@@ -87,7 +87,10 @@ impl EventBus {
     /// # 返回
     /// `Result`，成功时返回 `()`，失败时包含 `EventBusError`。
     pub fn send(&self, event: Event) -> Result<(), EventBusError> {
-        self.sender.send(event).map(|_| ()).map_err(|e| EventBusError::SendError(e.0))
+        self.sender
+            .send(event)
+            .map(|_| ())
+            .map_err(|e| EventBusError::SendError(e.0))
     }
 
     /// 订阅此事件总线的事件流。
@@ -96,7 +99,7 @@ impl EventBus {
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.sender.subscribe()
     }
-    
+
     /// 返回当前活跃的订阅者数量。
     pub fn subscriber_count(&self) -> usize {
         self.sender.receiver_count()
@@ -123,7 +126,7 @@ impl std::error::Error for EventBusError {}
 /// 全局事件总线实例。
 /// 使用 `OnceLock` 确保全局实例只被初始化一次。
 static GLOBAL_EVENT_BUS: OnceLock<EventBus> = OnceLock::new();
-const DEFAULT_EVENT_BUS_CAPACITY: usize = 1024 * 1024;  // 1 megas
+const DEFAULT_EVENT_BUS_CAPACITY: usize = 1024 * 1024; // 1 megas
 
 impl EventBus {
     /// 获取或创建全局单例事件总线实例。
@@ -134,7 +137,7 @@ impl EventBus {
             .get_or_init(|| EventBus::new(DEFAULT_EVENT_BUS_CAPACITY))
             .clone()
     }
-    
+
     /// 使用自定义容量初始化全局事件总线。
     ///
     /// 此函数只在全局事件总线尚未初始化时生效。
@@ -149,7 +152,9 @@ impl EventBus {
     pub fn init_global_with_capacity(capacity: usize) -> Result<(), EventBusError> {
         match GLOBAL_EVENT_BUS.set(EventBus::new(capacity)) {
             Ok(()) => Ok(()),
-            Err(_) => Err(EventBusError::SendError(Event::ErrorOccurred("Global event bus already initialized".to_string()))),
+            Err(_) => Err(EventBusError::SendError(Event::ErrorOccurred(
+                "Global event bus already initialized".to_string(),
+            ))),
         }
     }
 }

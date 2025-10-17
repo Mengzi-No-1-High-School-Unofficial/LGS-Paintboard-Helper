@@ -109,8 +109,7 @@ impl PaintOperation {
         data.extend_from_slice(&uid_bytes[0..3]); // 取 UID 的前 3 字节
 
         // 添加 16 字节令牌 - 将 UUID 字符串解析为 16 字节二进制格式
-        let token_uuid = Uuid::parse_str(&self.token)
-            .unwrap_or_else(|_| Uuid::nil()); // 如果解析失败，则使用 nil UUID
+        let token_uuid = Uuid::parse_str(&self.token).unwrap_or_else(|_| Uuid::nil()); // 如果解析失败，则使用 nil UUID
         data.extend_from_slice(token_uuid.as_bytes());
 
         // 添加 4 字节绘画 ID

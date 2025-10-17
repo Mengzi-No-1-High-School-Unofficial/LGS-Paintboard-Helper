@@ -4,8 +4,8 @@ use std::path::PathBuf;
 /// Winter Paintboard CLI client - 在洛谷画板上绘制图像的工具
 #[derive(Parser)]
 #[command(
-    author = "Xyber Nova <xyber-nova@outlook.com>", 
-    version, 
+    author = "Xyber Nova <xyber-nova@outlook.com>",
+    version,
     about = "洛谷保存站冬日绘板绘制工具",
     long_about = r#"
 LGS Winter Paintboard Helper
@@ -77,7 +77,7 @@ pub enum Commands {
         #[arg(long, default_value = "pool", value_parser = parse_client_type)]
         client_type: winter_paintboard_sdk::ClientType,
     },
-    
+
     /// 循环绘制模式：按周期重复绘制
     DrawLoop {
         /// 认证 Token (与 --access-key 二选一)
@@ -115,19 +115,19 @@ pub enum Commands {
         /// 图片绘制时的高度 (可选，默认为原图高度)
         #[arg(long)]
         height: Option<u32>,
-        
+
         /// 绘制每个像素之间的延迟（毫秒）(可选，默认为10毫秒，减少此值会增加发送速率)
         #[arg(long, default_value_t = 10)]
         delay: u64,
-        
+
         /// 使用批量绘制模式（粘包发送）(可选，默认为启用)
         #[arg(long, default_value_t = true)]
         batch_mode: bool,
-        
+
         /// 批量模式下每次发送的最大像素数量 (可选，默认为10240)
         #[arg(long, default_value_t = 10240)]
         max_batch_size: usize,
-        
+
         /// 循环绘制的时间间隔（毫秒）(可选，默认为10000毫秒，即10秒)
         #[arg(long, default_value_t = 10000)]
         loop_interval: u64,
@@ -140,7 +140,7 @@ pub enum Commands {
         #[arg(long, default_value = "pool", value_parser = parse_client_type)]
         client_type: winter_paintboard_sdk::ClientType,
     },
-    
+
     /// 单次绘制模式：执行一次绘制操作
     DrawOnce {
         /// 认证 Token (与 --access-key 二选一)
@@ -178,15 +178,15 @@ pub enum Commands {
         /// 图片绘制时的高度 (可选，默认为原图高度)
         #[arg(long)]
         height: Option<u32>,
-        
+
         /// 绘制每个像素之间的延迟（毫秒）(可选，默认为100毫秒，减少此值会增加发送速率)
         #[arg(long, default_value_t = 100)]
         delay: u64,
-        
+
         /// 使用批量绘制模式（粘包发送）(可选，默认为启用)
         #[arg(long, default_value_t = true)]
         batch_mode: bool,
-        
+
         /// 批量模式下每次发送的最大像素数量 (可选，默认为10240)
         #[arg(long, default_value_t = 10240)]
         max_batch_size: usize,
@@ -203,7 +203,7 @@ pub enum Commands {
         #[arg(long, default_value = "pool", value_parser = parse_client_type)]
         client_type: winter_paintboard_sdk::ClientType,
     },
-    
+
     /// 获取当前画板状态
     GetBoard {
         /// 认证 Token (与 --access-key 二选一)
@@ -226,7 +226,7 @@ pub enum Commands {
         #[arg(short, long)]
         output: Option<String>,
     },
-    
+
     /// 显示项目信息和作者信息
     About,
 }
