@@ -21,9 +21,9 @@ pub struct IncrementalManager {
 }
 
 impl IncrementalManager {
-    /// 创建新的增量管理器
+    /// 使用已共享的 Arc<Mutex> 客户端创建增量管理器
     pub fn new(
-        client: Box<dyn PaintboardClientTrait + Send>,
+        client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
         local_board: Arc<Mutex<LocalBoard>>,
         target_image_data: ProcessedImageData,
         start_x: i32,
@@ -33,7 +33,7 @@ impl IncrementalManager {
         max_batch_size: usize,
     ) -> Self {
         Self {
-            client: Arc::new(Mutex::new(client)),
+            client,
             local_board,
             target_image_data,
             start_x,
@@ -49,19 +49,14 @@ impl IncrementalManager {
         info!("开始执行增量模式初始绘制...");
 
         // 使用现有的批量绘制函数进行初始绘制
-        {
-            let mut client = self.client.lock().await;
-
-            // 使用批量模式进行初始绘制，参数使用传入的值
-            crate::app::drawing::draw_image_to_paintboard_with_client(
-                client.as_mut(),
-                &self.target_image_data,
-                &crate::app::drawing::ProgressiveMode::None, // 使用普通模式
-                self.max_batch_size,
-                self.restore_delay.as_millis() as u64, // 使用恢复延迟作为绘制延迟
-            )
-            .await?;
-        }
+        crate::app::drawing::draw_image_to_paintboard_with_client(
+            &self.client,
+            &self.target_image_data,
+            &crate::app::drawing::ProgressiveMode::None, // 使用普通模式
+            self.max_batch_size,
+            self.restore_delay.as_millis() as u64, // 使用恢复延迟作为绘制延迟
+        )
+        .await?;
 
         info!("初始绘制完成");
         Ok(())
@@ -220,17 +215,21 @@ pub async fn start_incremental_if_enabled(
     monitor_interval: u64,
     restore_delay: u64,
     max_batch_size: usize,
-    mut client: Box<dyn PaintboardClientTrait + Send>, // 从外部传入客户端，支持连接池
+    client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>, // 现在接收已共享的客户端
 ) -> Result<(), Box<dyn std::error::Error>> {
     if enable_incremental {
         info!("启用增量修改模式");
-
-        // 设置认证信息
-        client.set_auth(cli_uid, cli_token.unwrap_or_default().to_string());
-
-        // 创建增量管理器
+ 
+        // 设置认证信息（通过加锁设置）
+        {
+            let mut cl = client.lock().await;
+            cl.as_mut()
+                .set_auth(cli_uid, cli_token.unwrap_or_default().to_string());
+        }
+ 
+        // 创建增量管理器（直接传入共享客户端）
         let mut incremental_manager = IncrementalManager::new(
-            client,
+            client.clone(),
             sync_manager.local_board(),
             target_image_data.clone(),
             start_x,

@@ -193,10 +193,13 @@ async fn run_incremental_mode(
     config.ws_url = ws_url
         .clone()
         .unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
-    let mut client = create_client(config, client_type).await?; // 使用新的API和客户端类型
-
-    // 设置认证信息
-    client.as_mut().set_auth(uid, token.to_string());
+    let client_box = create_client(config, client_type).await?;
+    let client = std::sync::Arc::new(tokio::sync::Mutex::new(client_box));
+    {
+        // 设置认证信息（通过加锁设置）
+        let mut cl = client.lock().await;
+        cl.as_mut().set_auth(uid, token.to_string());
+    }
 
     // 检查是否启用本地同步
     info!("启用本地绘版数据同步...");
@@ -312,10 +315,13 @@ async fn run_draw_loop_mode(
     config.ws_url = ws_url
         .clone()
         .unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
-    let mut client = create_client(config, client_type).await?; // 使用新的API和客户端类型
-
-    // 设置认证信息
-    client.as_mut().set_auth(uid, token.to_string());
+    let client_box = create_client(config, client_type).await?;
+    let client = std::sync::Arc::new(tokio::sync::Mutex::new(client_box));
+    {
+        // 设置认证信息（通过加锁设置）
+        let mut cl = client.lock().await;
+        cl.as_mut().set_auth(uid, token.to_string());
+    }
 
     // Determine progressive mode
     let progressive_mode = ProgressiveMode::from_string(&progressive);
@@ -328,7 +334,7 @@ async fn run_draw_loop_mode(
     loop {
         // 在循环内部使用已预处理的数据，避免重复预处理
         if let Err(e) = crate::app::drawing::draw_image_to_paintboard_with_client(
-            client.as_mut(),
+            &client,
             &processed_image_data,
             &progressive_mode,
             max_batch_size,
@@ -389,10 +395,13 @@ async fn run_draw_once_mode(
     config.ws_url = ws_url
         .clone()
         .unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
-    let mut client = create_client(config, client_type).await?; // 使用新的API和客户端类型
-
-    // 设置认证信息
-    client.as_mut().set_auth(uid, token.to_string());
+    let client_box = create_client(config, client_type).await?;
+    let client = std::sync::Arc::new(tokio::sync::Mutex::new(client_box));
+    {
+        // 设置认证信息（通过加锁设置）
+        let mut cl = client.lock().await;
+        cl.as_mut().set_auth(uid, token.to_string());
+    }
 
     // Determine progressive mode
     let progressive_mode = ProgressiveMode::from_string(&progressive);
@@ -403,7 +412,7 @@ async fn run_draw_once_mode(
 
     // 单次绘制模式 - 使用已预处理的数据
     crate::app::drawing::draw_image_to_paintboard_with_client(
-        client.as_mut(),
+        &client,
         &processed_image_data,
         &progressive_mode,
         max_batch_size,
