@@ -9,7 +9,7 @@ pub mod utils;
 use log::{error, info};
 use tokio::time::Duration;
 use winter_paintboard_sdk::client::HttpProvider;
-use winter_paintboard_sdk::{config::Config, PaintboardClientTrait};
+use winter_paintboard_sdk::config::Config;
 
 use crate::app::{
     board_sync::BoardSyncManager,

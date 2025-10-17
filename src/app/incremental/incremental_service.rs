@@ -1,21 +1,23 @@
 use crate::app::board_sync::{BoardSyncManager, LocalBoard};
 use crate::app::image_processing::ProcessedImageData;
+use crate::app::incremental::pixel_comparison::calculate_color_difference;
+use crate::app::incremental::restoration_manager::restore_sorted_pixels;
 use log::{debug, error, info, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::time::{interval, sleep, Duration};
+use tokio::time::{interval, Duration};
 use winter_paintboard_sdk::{PaintboardClientTrait, Pos, Rgb};
 
-/// 增量修改管理器
+/// 增量修改管理器（从原 `incremental.rs` 迁移）
 pub struct IncrementalManager {
-    client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
-    local_board: Arc<Mutex<LocalBoard>>,
-    target_image_data: ProcessedImageData,
-    start_x: i32,
-    start_y: i32,
-    monitor_interval: Duration,
-    restore_delay: Duration,
-    max_batch_size: usize,
+    pub client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
+    pub local_board: Arc<Mutex<LocalBoard>>,
+    pub target_image_data: ProcessedImageData,
+    pub start_x: i32,
+    pub start_y: i32,
+    pub monitor_interval: Duration,
+    pub restore_delay: Duration,
+    pub max_batch_size: usize,
 }
 
 impl IncrementalManager {
@@ -28,7 +30,7 @@ impl IncrementalManager {
         start_y: i32,
         monitor_interval: Duration,
         restore_delay: Duration,
-        max_batch_size: usize, // 添加批处理大小参数
+        max_batch_size: usize,
     ) -> Self {
         Self {
             client: Arc::new(Mutex::new(client)),
@@ -38,7 +40,7 @@ impl IncrementalManager {
             start_y,
             monitor_interval,
             restore_delay,
-            max_batch_size, // 添加批处理大小
+            max_batch_size,
         }
     }
 
@@ -55,8 +57,8 @@ impl IncrementalManager {
                 client.as_mut(),
                 &self.target_image_data,
                 &crate::app::drawing::ProgressiveMode::None, // 使用普通模式
-                self.max_batch_size,                         // 使用传入的批量大小
-                self.restore_delay.as_millis() as u64,       // 使用恢复延迟作为绘制延迟
+                self.max_batch_size,
+                self.restore_delay.as_millis() as u64, // 使用恢复延迟作为绘制延迟
             )
             .await?;
         }
@@ -65,7 +67,7 @@ impl IncrementalManager {
         Ok(())
     }
 
-    /// 开始监控并增量修改
+    /// 启动监控循环（内部使用）
     pub async fn start_monitoring(
         client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
         local_board: Arc<Mutex<LocalBoard>>,
@@ -74,7 +76,7 @@ impl IncrementalManager {
         start_y: i32,
         monitor_interval: Duration,
         restore_delay: Duration,
-        max_batch_size: usize, // 添加批处理大小参数
+        max_batch_size: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
         info!(
             "开始监控绘版变化，监控间隔: {:?}, 批处理大小: {}",
@@ -94,7 +96,7 @@ impl IncrementalManager {
                     start_x,
                     start_y,
                     restore_delay,
-                    max_batch_size, // 传递批处理大小参数
+                    max_batch_size,
                 )
                 .await
                 {
@@ -114,7 +116,7 @@ impl IncrementalManager {
         start_x: i32,
         start_y: i32,
         restore_delay: Duration,
-        max_batch_size: usize, // 添加批处理大小参数
+        max_batch_size: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
         info!("开始比对绘版数据与目标图片...");
 
@@ -149,7 +151,7 @@ impl IncrementalManager {
                 if let Some(current_pixel_status) = local_pixels.get(pos) {
                     // 计算颜色差异，用于优先级排序
                     let color_diff =
-                        Self::calculate_color_difference(&current_pixel_status.color, target_color);
+                        calculate_color_difference(&current_pixel_status.color, target_color);
 
                     if current_pixel_status.color != *target_color {
                         debug!(
@@ -195,54 +197,13 @@ impl IncrementalManager {
                 pixels_to_restore.len()
             );
 
-            let pixels_count = pixels_to_restore.len();
-
-            // 使用异步批量发送功能恢复像素
-            let mut tasks = Vec::new();
-            for chunk in pixels_to_restore.chunks(max_batch_size) {
-                let client_clone = client.clone();
-                let chunk_vec = chunk.to_vec(); // 创建一个拥有所有权的Vec
-                let delay = restore_delay; // 保存delay用于异步任务
-                let chunk_len = chunk.len(); // 保存chunk长度用于异步任务
-
-                let task = tokio::spawn(async move {
-                    // 短暂延迟以避免所有任务同时发送
-                    sleep(delay).await;
-
-                    let mut client_lock = client_clone.lock().await;
-                    match client_lock.as_mut().paint_batch(chunk_vec).await {
-                        Ok(()) => debug!("成功恢复像素批次，包含 {} 个像素", chunk_len),
-                        Err(e) => error!("批量恢复像素失败: {:?}", e),
-                    }
-                });
-
-                tasks.push(task);
-
-                // 为了防止单次产生过多并发任务，可以添加一个小延迟
-                sleep(Duration::from_millis(10)).await;
-            }
-
-            // 等待所有异步任务完成
-            for task in tasks {
-                let _ = task.await;
-            }
-
-            info!("完成恢复 {} 个像素", pixels_count);
+            // 使用已拆分出的 restoration_manager 执行批量恢复
+            restore_sorted_pixels(client, pixels_to_restore, restore_delay, max_batch_size).await?;
         } else {
             info!("未检测到目标区域内像素被修改");
         }
 
         Ok(())
-    }
-
-    // 计算两个RGB颜色之间的差异
-    fn calculate_color_difference(color1: &Rgb, color2: &Rgb) -> f64 {
-        let dr = (color1.r as i32 - color2.r as i32) as f64;
-        let dg = (color1.g as i32 - color2.g as i32) as f64;
-        let db = (color1.b as i32 - color2.b as i32) as f64;
-
-        // 使用欧几里得距离计算颜色差异
-        ((dr * dr + dg * dg + db * db) / 3.0).sqrt()
     }
 }
 
@@ -258,7 +219,7 @@ pub async fn start_incremental_if_enabled(
     start_y: i32,
     monitor_interval: u64,
     restore_delay: u64,
-    max_batch_size: usize,                             // 添加批处理大小参数
+    max_batch_size: usize,
     mut client: Box<dyn PaintboardClientTrait + Send>, // 从外部传入客户端，支持连接池
 ) -> Result<(), Box<dyn std::error::Error>> {
     if enable_incremental {
@@ -276,7 +237,7 @@ pub async fn start_incremental_if_enabled(
             start_y,
             Duration::from_millis(monitor_interval),
             Duration::from_millis(restore_delay),
-            max_batch_size, // 传递批处理大小参数
+            max_batch_size,
         );
 
         // 执行初始绘制
@@ -291,7 +252,7 @@ pub async fn start_incremental_if_enabled(
             start_y,
             Duration::from_millis(monitor_interval),
             Duration::from_millis(restore_delay),
-            max_batch_size, // 传递批处理大小参数
+            max_batch_size,
         )
         .await?;
 

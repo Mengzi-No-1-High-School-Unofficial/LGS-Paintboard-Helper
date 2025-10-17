@@ -1,28 +1,12 @@
+// 模块: src/app/drawing/drawing_strategies.rs
+//! 渐进式绘制策略（例如棋盘格）实现
+
 use log::{debug, error, info, warn};
 use tokio::time::Duration;
-use winter_paintboard_sdk::{
-    config::Config, create_client_by_type, BasicClient, ClientType, PaintboardClientTrait,
-};
+use winter_paintboard_sdk::{BasicClient, PaintboardClientTrait};
 
+use super::progressive_mode::ProgressiveMode;
 use crate::app::image_processing::ProcessedImageData;
-
-/// Represents different progressive drawing modes
-#[derive(Debug)]
-pub enum ProgressiveMode {
-    None,
-    Chessboard,
-    Scale,
-}
-
-impl ProgressiveMode {
-    pub fn from_string(s: &str) -> Self {
-        match s {
-            "chessboard" => ProgressiveMode::Chessboard,
-            "scale" => ProgressiveMode::Scale,
-            _ => ProgressiveMode::None,
-        }
-    }
-}
 
 /// Draws an image to the paintboard using various modes
 pub async fn draw_image_to_paintboard(
@@ -117,7 +101,7 @@ pub async fn draw_image_to_paintboard_with_client(
             step, processed_progressive, total_pixels
         );
 
-        // 在每个步骤之间添加延迟，以产生"逐步清晰"的视觉效果
+        // 在每个步骤之间添加延迟，以产生\"逐步清晰\"的视觉效果
         if step < steps - 1 {
             // 最后一步后不需要等待
             tokio::time::sleep(Duration::from_millis(delay)).await;
@@ -130,12 +114,4 @@ pub async fn draw_image_to_paintboard_with_client(
     );
 
     Ok(())
-}
-
-/// Creates a new paintboard client with the given config and client type
-pub async fn create_client(
-    config: Config,
-    client_type: ClientType,
-) -> Result<Box<dyn PaintboardClientTrait + Send>, Box<dyn std::error::Error>> {
-    Ok(create_client_by_type(config, client_type).await?)
 }
