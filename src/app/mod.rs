@@ -4,9 +4,11 @@ pub mod drawing;
 pub mod export;
 pub mod image_processing;
 pub mod incremental;
+pub mod multi_token;
 pub mod utils;
 
 use log::{error, info};
+use std::path::PathBuf;
 use tokio::time::Duration;
 use winter_paintboard_sdk::client::HttpProvider;
 use winter_paintboard_sdk::config::Config;
@@ -148,7 +150,118 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             // 显示项目信息和作者信息
             run_about_mode().await
         }
+        Commands::MultiToken {
+            config,
+            access_keys,
+            uids,
+            cd_time,
+            ws_url,
+            image,
+            x,
+            y,
+            width,
+            height,
+            comparison_interval,
+        } => {
+            // 多 Token 模式
+            run_multi_token_mode(
+                config,
+                ws_url,
+                image,
+                x,
+                y,
+                width,
+                height,
+                cd_time,
+                comparison_interval,
+            )
+            .await
+        }
     }
+}
+
+/// 运行多 Token 模式
+pub async fn run_multi_token_mode(
+    config_path: PathBuf,
+    ws_url: Option<String>,
+    image: PathBuf,
+    x: i32,
+    y: i32,
+    width: Option<u32>,
+    height: Option<u32>,
+    cd_time: u64,
+    comparison_interval: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::app::board_sync::BoardSyncManager;
+    use crate::app::image_processing::process_image_at_all_scales;
+    use crate::app::multi_token::multi_token_service::MultiTokenService;
+    use winter_paintboard_sdk::{BasicClient, config::Config, PaintboardClientTrait};
+
+    info!("启动多 Token 绘制模式...");
+    
+    // 加载配置
+    let token_config = crate::app::multi_token::config::TokenConfig::from_file(&config_path)?;
+    
+    // 创建同步管理器
+    let event_bus = winter_paintboard_sdk::event::EventBus::global();
+    let sync_manager = BoardSyncManager::new(&event_bus);
+    
+    // 为同步任务创建新的客户端
+    let mut sync_config = Config::default();
+    if let Some(url) = &ws_url {
+        sync_config.ws_url = url.clone();
+    }
+    let mut sync_client = BasicClient::new(sync_config).await?;
+    // 使用第一个 token 的认证信息
+    if let Some(first_token) = token_config.tokens.first() {
+        let token = if let Some(token_str) = &first_token.token {
+            token_str.clone()
+        } else if let Some(access_key) = &first_token.access_key {
+            // 需要获取 token，这里暂时使用占位符
+            return Err("暂时不支持从 access_key 获取 token，请使用预获取的 token".into());
+        } else {
+            return Err("缺少 token 或 access_key".into());
+        };
+        sync_client.set_auth(first_token.uid, token);
+    }
+    
+    // 启动增量同步循环
+    sync_manager
+        .start_incremental_sync_loop(
+            Box::new(sync_client),
+            tokio::time::Duration::from_millis(comparison_interval),
+        )
+        .await?;
+    
+    // 启动事件监听（增量更新）
+    sync_manager.start_event_listener().await?;
+    
+    info!("本地绘版数据同步已启动");
+    
+    // 处理图片
+    info!("正在预处理图片数据...");
+    let processed_image_data = process_image_at_all_scales(&image, width, height, x, y)?;
+    
+    // 创建并启动多 Token 服务
+    let mut service = MultiTokenService::new(
+        token_config,
+        ws_url,
+        sync_manager.local_board(),
+        processed_image_data,
+        x,
+        y,
+        tokio::time::Duration::from_millis(comparison_interval),
+    ).await?;
+    
+    service.start().await?;
+    
+    info!("多 Token 模式已启动，按 Ctrl+C 停止...");
+    tokio::signal::ctrl_c().await?;
+    
+    // 清理
+    service.stop().await?;
+    
+    Ok(())
 }
 
 async fn run_incremental_mode(

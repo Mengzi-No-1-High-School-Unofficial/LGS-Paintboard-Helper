@@ -81,4 +81,28 @@ pub trait PaintboardClientTrait {
     /// `Result`，成功时返回 `()` (表示操作成功但没有特定返回值)，
     /// 失败时包含 `PaintboardError`。
     async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError>;
+
+    /// 获取客户端配置信息。
+    ///
+    /// # 返回
+    /// `Config` 的引用，用于获取连接信息等。
+    fn get_config(&self) -> &Config;
+
+    /// 使用临时 Token 绘制像素（不修改客户端状态）。
+    ///
+    /// # 参数
+    /// - `pos`: 像素位置。
+    /// - `color`: 像素颜色。
+    /// - `uid`: 临时 UID。
+    /// - `token`: 临时认证令牌。
+    ///
+    /// # 返回
+    /// `Result`，成功时包含 `PaintResult`，失败时包含 `PaintboardError`。
+    async fn paint_with_token(
+        &mut self,
+        pos: Pos,
+        color: Rgb,
+        uid: u32,
+        token: String,
+    ) -> Result<crate::models::PaintResult, PaintboardError>;
 }
