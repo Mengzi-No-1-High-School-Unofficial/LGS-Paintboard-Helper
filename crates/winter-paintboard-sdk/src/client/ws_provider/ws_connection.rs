@@ -79,18 +79,42 @@ impl WsConnection {
     /// 非阻塞检查当前是否有连接
     pub async fn is_connected(&self) -> bool {
         let guard = self.stream.lock().await;
-        guard.is_some()
+        let is_some = guard.is_some();
+        if is_some {
+            debug!("连接状态检查: 连接存在 (但可能是僵尸连接)");
+        } else {
+            debug!("连接状态检查: 连接不存在");
+        }
+        is_some
     }
 
     /// 发送二进制消息（将错误封装为 PaintboardError）
     pub async fn send_binary(&self, data: Vec<u8>) -> Result<(), PaintboardError> {
+        debug!("尝试获取连接锁进行发送，数据大小: {} 字节", data.len());
         let mut guard = self.stream.lock().await;
-        let ws_stream = guard.as_mut().ok_or(PaintboardError::ConnectionClosed)?;
+        debug!("获取连接锁成功");
+        
+        let ws_stream = guard.as_mut().ok_or_else(|| {
+            error!("发送失败: 连接已关闭 (stream is None)");
+            PaintboardError::ConnectionClosed
+        })?;
 
+        debug!("开始发送二进制消息");
         match ws_stream.send(Message::Binary(data)).await {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                debug!("二进制消息发送成功");
+                Ok(())
+            }
             Err(e) => {
-                error!("发送二进制消息失败: {}", e);
+                error!("发送二进制消息失败: {} (错误类型: {:?})", e, std::any::type_name_of_val(&e));
+                
+                // 检查是否是连接关闭错误
+                let error_str = e.to_string();
+                if error_str.contains("EOF") || error_str.contains("closed") {
+                    error!("检测到连接已关闭，清理连接状态");
+                    drop(guard.take()); // 清理无效连接
+                }
+                
                 let event_bus = EventBus::global();
                 let _ = event_bus.send(crate::event::Event::error_event(format!(
                     "Failed to send binary message: {}",

@@ -313,7 +313,7 @@ impl PaintboardClientTrait for PoolClient {
                     }
 
                     // 实现指数退避延迟
-                    let delay = std::time::Duration::from_millis((1 << attempts) * 100); // 100ms, 200ms, 400ms
+                    let delay = std::time::Duration::from_millis((1 << attempts) * 10); // 10ms, 20ms, 40ms
                     tokio::time::sleep(delay).await;
                 }
             }
@@ -505,11 +505,40 @@ impl PaintboardClientTrait for PoolClient {
                     }
 
                     // 实现指数退避延迟
-                    let delay = std::time::Duration::from_millis((1 << attempts) * 100); // 100ms, 200ms, 400ms
+                    let delay = std::time::Duration::from_millis((1 << attempts) * 10); // 100ms, 200ms, 400ms
                     tokio::time::sleep(delay).await;
                 }
             }
         }
+    }
+
+    fn get_config(&self) -> &Config {
+        unimplemented!("PoolClient 已被弃用，不支持此方法")
+    }
+
+    async fn paint_with_token(
+        &mut self,
+        pos: Pos,
+        color: Rgb,
+        uid: u32,
+        token: String,
+    ) -> Result<PaintResult, PaintboardError> {
+        // 临时保存当前认证信息
+        let old_uid = self.write_pool.uid;
+        let old_token = self.write_pool.token.clone();
+        
+        // 设置临时认证信息
+        self.write_pool.set_auth(uid, token.clone());
+        
+        // 执行绘制操作
+        let result = self.paint(pos, color).await;
+        
+        // 恢复原始认证信息
+        if let (Some(old_uid), Some(old_token)) = (old_uid, old_token) {
+            self.write_pool.set_auth(old_uid, old_token);
+        }
+        
+        result
     }
 }
 

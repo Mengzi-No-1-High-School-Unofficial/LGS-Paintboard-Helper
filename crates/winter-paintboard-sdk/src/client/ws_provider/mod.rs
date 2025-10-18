@@ -11,7 +11,7 @@ use crate::{
     models::{OpCode, PaintOperation, PaintResult, PaintStatus, Pos, ProtocolMessage, Rgb},
 };
 use std::sync::Arc;
-use tokio::sync::{Mutex as TokioMutex, oneshot};
+use tokio::sync::{Mutex as TokioMutex, oneshot, Notify};
 use tracing::{debug, error, info, trace, warn};
 use url::Url;
 use futures::{SinkExt, StreamExt};
@@ -39,6 +39,7 @@ pub struct WsProvider {
     reconnect_strategy: Arc<TokioMutex<WsReconnectStrategy>>,
     rate_limiter: Arc<WsRateLimiter>,
     cleanup_task_handle: Option<JoinHandle<()>>,
+    message_task_ready: Arc<Notify>,
 }
 
 impl WsProvider {
@@ -75,6 +76,7 @@ impl WsProvider {
             reconnect_strategy,
             rate_limiter,
             cleanup_task_handle,
+            message_task_ready: Arc::new(Notify::new()),
         })
     }
 
@@ -90,6 +92,15 @@ impl WsProvider {
         self.connection.connect().await?;
         // Cancel previous task and start a new one
         self.start_message_processing_task().await;
+        
+        // 等待后台消息处理任务真正启动
+        debug!("等待后台消息处理任务启动...");
+        let ready_notify = self.message_task_ready.clone();
+        tokio::time::timeout(Duration::from_secs(5), ready_notify.notified())
+            .await
+            .map_err(|_| PaintboardError::timeout())?;
+        debug!("后台消息处理任务已启动");
+        
         Ok(())
     }
 
@@ -107,9 +118,15 @@ impl WsProvider {
         let reconnect_strategy = self.reconnect_strategy.clone();
         let connection = self.connection.clone();
         let config = self.config.clone();
+        let ready_notify = self.message_task_ready.clone();
 
         self.message_task_handle = Some(tokio::spawn(async move {
             debug!("消息处理任务开始运行");
+            
+            // 发送启动完成信号
+            ready_notify.notify_one();
+            debug!("消息处理任务启动信号已发送");
+            
             loop {
                 // Inner loop: read messages while connected
                 loop {
@@ -126,7 +143,17 @@ impl WsProvider {
                             }
                             Some(Err(e)) => {
                                 drop(guard);
-                                error!("WebSocket 错误: {}", e);
+                                error!("WebSocket 错误: {} (错误类型: {:?})", e, std::any::type_name_of_val(&e));
+                                warn!("消息处理任务检测到错误，将清理连接并尝试重连");
+                                
+                                // 清理可能的僵尸连接
+                                let mut cleanup_guard = stream_arc.lock().await;
+                                if cleanup_guard.is_some() {
+                                    warn!("清理错误的连接状态");
+                                    *cleanup_guard = None;
+                                }
+                                drop(cleanup_guard);
+                                
                                 let _ = EventBus::global().send(Event::error_event(format!(
                                     "WebSocket error: {}",
                                     e
@@ -135,7 +162,16 @@ impl WsProvider {
                             }
                             None => {
                                 drop(guard);
-                                debug!("WebSocket 连接关闭 (None received)");
+                                warn!("WebSocket 连接关闭 (收到 None)，清理连接状态");
+                                
+                                // 清理连接
+                                let mut cleanup_guard = stream_arc.lock().await;
+                                if cleanup_guard.is_some() {
+                                    warn!("清理已关闭的连接");
+                                    *cleanup_guard = None;
+                                }
+                                drop(cleanup_guard);
+                                
                                 let _ = EventBus::global().send(Event::ConnectionClosed);
                                 break; // break inner loop to attempt reconnection
                             }
@@ -198,16 +234,21 @@ impl WsProvider {
         let uid = self.uid.ok_or(PaintboardError::auth("UID not set".to_string()))?;
         let token = self.token.clone().ok_or(PaintboardError::auth("Token not set".to_string()))?;
 
+        // Generate unique paint id first (needed for logging)
+        let paint_id = rand::random::<u64>();
+
         // Ensure connected
-        if !self.connection.is_connected().await {
-            debug!("连接不存在，建立新连接");
+        let is_connected = self.connection.is_connected().await;
+        debug!("paint() - 连接状态检查结果: {} (paint_id: {})", is_connected, paint_id);
+        if !is_connected {
+            debug!("连接不存在，建立新连接 (paint_id: {})", paint_id);
             self.connection.connect().await?;
+            debug!("新连接建立成功 (paint_id: {})", paint_id);
         } else {
-            debug!("连接已存在，复用连接");
+            debug!("连接已存在，尝试复用连接 (paint_id: {})", paint_id);
         }
 
-        // Generate unique paint id and operation
-        let paint_id = rand::random::<u64>();
+        // Create operation
         let operation = PaintOperation {
             pos,
             color,
@@ -237,13 +278,16 @@ impl WsProvider {
         );
 
         // Register response receiver
+        debug!("注册响应追踪器，paint_id: {}", paint_id);
         let response_rx = self.response_tracker.register_request(paint_id).await;
 
         // Send binary
+        debug!("准备发送绘图消息，paint_id: {}", paint_id);
         self.connection.send_binary(binary_data).await.map_err(|e| {
-            error!("发送绘图消息失败: {:?}", e);
+            error!("发送绘图消息失败 (paint_id: {}): {:?}", paint_id, e);
             e
         })?;
+        debug!("绘图消息已发送，等待响应 (paint_id: {})", paint_id);
 
         // Wait for response with timeout
         match timeout(Duration::from_secs(10), response_rx).await {
@@ -256,8 +300,14 @@ impl WsProvider {
                 Err(PaintboardError::ResponseChannelClosed)
             }
             Err(_) => {
-                debug!("等待响应超时，清理通道");
-                let _ = self.response_tracker.remove_request(paint_id).await;
+                warn!("等待响应超时 (paint_id: {}，超时: 10s)，清理通道", paint_id);
+                let removed = self.response_tracker.remove_request(paint_id).await;
+                debug!("清理响应通道结果: {}", removed);
+                
+                // 检查连接状态
+                let still_connected = self.connection.is_connected().await;
+                warn!("超时后连接状态: {}", still_connected);
+                
                 Err(PaintboardError::timeout())
             }
         }
@@ -410,5 +460,91 @@ impl WsProvider {
 
         self.connection.close().await?;
         Ok(())
+    }
+    
+    /// 使用临时 Token 绘制像素（不修改客户端状态）
+    pub async fn paint_with_token(
+        &mut self,
+        pos: Pos,
+        color: Rgb,
+        uid: u32,
+        token: String,
+    ) -> Result<PaintResult, PaintboardError> {
+        // 临时保存当前认证信息
+        let old_uid = self.uid;
+        let old_token = self.token.clone();
+        
+        // 设置临时认证信息
+        self.set_auth(uid, token);
+        
+        // 确保连接并绘制
+        if !self.connection.is_connected().await {
+            debug!("连接不存在，建立新连接");
+            self.connection.connect().await?;
+        } else {
+            debug!("连接已存在，复用连接");
+        }
+        
+        let paint_id = rand::random::<u64>();
+        let operation = PaintOperation {
+            pos,
+            color,
+            token_uid: uid,
+            token: self.token.clone().unwrap_or_default(),
+            paint_id: paint_id as u32,
+        };
+        
+        let binary_data = operation.to_binary();
+        
+        // 单次绘图大小检查
+        if binary_data.len() > MAX_PACKET_SIZE {
+            return Err(PaintboardError::invalid_data(
+                format!(
+                    "绘图消息大小 {} 字节超过限制 {} 字节 ({}KB)",
+                    binary_data.len(),
+                    MAX_PACKET_SIZE,
+                    MAX_PACKET_SIZE / 1024
+                )
+            ));
+        }
+        
+        trace!(
+            "绘图操作二进制数据长度: {}, 前几个字节: {:?}",
+            binary_data.len(),
+            &binary_data[..std::cmp::min(10, binary_data.len())]
+        );
+        
+        // 注册响应接收器
+        let response_rx = self.response_tracker.register_request(paint_id).await;
+        
+        // 发送二进制数据
+        self.connection.send_binary(binary_data).await.map_err(|e| {
+            error!("发送绘图消息失败: {:?}", e);
+            e
+        })?;
+        
+        // 等待响应（带超时）
+        let result = match timeout(Duration::from_secs(10), response_rx).await {
+            Ok(Ok(result)) => {
+                debug!("成功接收到绘图结果");
+                Ok(result)
+            }
+            Ok(Err(_)) => {
+                debug!("响应通道关闭");
+                Err(PaintboardError::ResponseChannelClosed)
+            }
+            Err(_) => {
+                debug!("等待响应超时，清理通道");
+                let _ = self.response_tracker.remove_request(paint_id).await;
+                Err(PaintboardError::timeout())
+            }
+        };
+        
+        // 恢复原始认证信息
+        if let Some(old_uid) = old_uid {
+            self.set_auth(old_uid, old_token.unwrap_or_default());
+        }
+        
+        result
     }
 }

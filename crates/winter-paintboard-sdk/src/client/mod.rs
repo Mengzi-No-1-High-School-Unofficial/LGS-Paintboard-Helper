@@ -157,6 +157,8 @@ impl BasicClient {
         if self.ws_client.is_none() {
             let mut ws_client = WsProvider::new(self.config.clone()).await?;
 
+            ws_client.connect().await?;
+
             // Set authentication if available
             if let (Some(uid), Some(token)) = (self.uid, self.token.as_ref()) {
                 ws_client.set_auth(uid, token.clone());
@@ -239,5 +241,53 @@ impl PaintboardClientTrait for BasicClient {
     /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
     async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
         self.paint_batch_impl(operations).await
+    }
+
+    /// 获取客户端配置信息。
+    ///
+    /// # 返回
+    /// `Config` 的引用，用于获取连接信息等。
+    fn get_config(&self) -> &Config {
+        &self.config
+    }
+
+    /// 使用临时 Token 绘制像素（不修改客户端状态）。
+    ///
+    /// # 参数
+    /// - `pos`: 像素位置。
+    /// - `color`: 像素颜色。
+    /// - `uid`: 临时 UID。
+    /// - `token`: 临时认证令牌。
+    ///
+    /// # 返回
+    /// `Result`，成功时包含 `PaintResult`，失败时包含 `PaintboardError`。
+    async fn paint_with_token(
+        &mut self,
+        pos: Pos,
+        color: Rgb,
+        uid: u32,
+        token: String,
+    ) -> Result<crate::models::PaintResult, PaintboardError> {
+        // 临时保存当前认证信息
+        let old_uid = self.uid;
+        let old_token = self.token.clone();
+        
+        // 设置临时认证信息
+        self.set_auth_impl(uid, token);
+        
+        // 初始化 WebSocket 并绘制
+        self.init_ws_provider_if_none().await?;
+        let result = if let Some(ref mut ws_client) = self.ws_client {
+            ws_client.paint(pos, color).await
+        } else {
+            Err(PaintboardError::ClientNotInitialized)
+        };
+        
+        // 恢复原始认证信息
+        if let Some(old_uid) = old_uid {
+            self.set_auth_impl(old_uid, old_token.unwrap_or_default());
+        }
+        
+        result
     }
 }
