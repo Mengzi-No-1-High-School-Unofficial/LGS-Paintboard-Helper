@@ -2,6 +2,7 @@ use crate::{
     error::PaintboardError,
     models::{Pos, Rgb},
 };
+use tracing::warn;
 
 /// WebSocket protocol operation codes
 #[repr(u8)]
@@ -11,6 +12,7 @@ pub enum OpCode {
     PaintResult = 0xff,   // Server to client
     HeartbeatPong = 0xfb, // Client to server
     Paint = 0xfe,         // Client to server
+    UnknownOpCode = 0xaf, // Used for unknown opcodes
 }
 
 impl From<u8> for OpCode {
@@ -21,7 +23,10 @@ impl From<u8> for OpCode {
             0xff => OpCode::PaintResult,
             0xfb => OpCode::HeartbeatPong,
             0xfe => OpCode::Paint,
-            _ => panic!("Unknown opcode: {}", value),
+            _ => {
+                warn!("Unknown opcode: {}", value);
+                OpCode::UnknownOpCode
+            }
         }
     }
 }
