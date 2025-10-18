@@ -29,6 +29,8 @@ impl PoolClient {
         min_connections: usize,
         max_connections: usize,
     ) -> Result<Self, PaintboardError> {
+        tracing::warn!("PoolClient 被弃用，并等待重构。请使用 Basic Client！");
+
         // 创建写连接池配置（使用WriteOnly模式）
         let mut write_config = config.clone();
         write_config.connection_mode = ConnectionMode::WriteOnly;
