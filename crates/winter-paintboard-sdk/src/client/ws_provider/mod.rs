@@ -21,7 +21,7 @@ use crate::client::ws_provider::ws_message_handler::WsMessageHandler;
 use crate::client::ws_provider::ws_reconnect::WsReconnectStrategy;
 use crate::client::ws_provider::ws_rate_limiter::WsRateLimiter;
 use tokio_tungstenite::tungstenite::protocol::Message;
-use tokio::time::{timeout, Duration};
+use tokio::time::{timeout, Duration, interval};
 use tokio::task::JoinHandle;
 
 /// 最大包大小 (32 KB)
@@ -38,6 +38,7 @@ pub struct WsProvider {
     message_task_handle: Option<JoinHandle<()>>,
     reconnect_strategy: Arc<TokioMutex<WsReconnectStrategy>>,
     rate_limiter: Arc<WsRateLimiter>,
+    cleanup_task_handle: Option<JoinHandle<()>>,
 }
 
 impl WsProvider {
@@ -50,6 +51,19 @@ impl WsProvider {
         // 采用与原实现一致的速率：256 rps（注意：原注释存在 120/256 的混淆）
         let rate_limiter = Arc::new(WsRateLimiter::new(256));
 
+        // 启动响应追踪器清理任务
+        let cleanup_tracker = response_tracker.clone();
+        let cleanup_task_handle = Some(tokio::spawn(async move {
+            let mut interval = interval(Duration::from_secs(60)); // 每60秒清理一次
+            loop {
+                interval.tick().await;
+                let removed_count = cleanup_tracker.cleanup_expired_requests(Duration::from_secs(60)).await;
+                if removed_count > 0 {
+                    debug!("响应追踪器清理任务：移除了 {} 个过期请求", removed_count);
+                }
+            }
+        }));
+
         Ok(Self {
             config,
             connection,
@@ -60,6 +74,7 @@ impl WsProvider {
             message_task_handle: None,
             reconnect_strategy,
             rate_limiter,
+            cleanup_task_handle,
         })
     }
 
@@ -274,6 +289,8 @@ impl WsProvider {
         let token = self.token.clone().ok_or(PaintboardError::auth("Token not set".to_string()))?;
 
         let mut all_binary = Vec::new();
+        let mut paint_ids = Vec::new(); // 存储paint_id用于清理
+        
         for (pos, color) in &operations {
             let paint_id = rand::random::<u64>();
             let op = PaintOperation {
@@ -284,10 +301,15 @@ impl WsProvider {
                 paint_id: paint_id as u32,
             };
             all_binary.extend(op.to_binary());
+            paint_ids.push(paint_id); // 记录paint_id
         }
 
         // 检查批量包大小，避免触发服务端 1009 (Message too big)
         if all_binary.len() > MAX_PACKET_SIZE {
+            // 如果包太大，清理已注册的请求
+            for paint_id in paint_ids {
+                let _ = self.response_tracker.remove_request(paint_id).await;
+            }
             return Err(PaintboardError::invalid_data(
                 format!(
                     "批量包大小 {} 字节超过限制 {} 字节 ({}KB)",
@@ -305,10 +327,20 @@ impl WsProvider {
             debug!("批量发送 - 连接已存在，复用连接");
         }
 
-        self.connection.send_binary(all_binary).await.map_err(|e| {
+        // 为所有操作注册请求，以便后台清理任务可以清理它们
+        for paint_id in &paint_ids {
+            let _ = self.response_tracker.register_request(*paint_id).await;
+        }
+
+        let send_result = self.connection.send_binary(all_binary).await;
+        if let Err(e) = send_result {
             error!("发送批量消息失败: {:?}", e);
-            e
-        })?;
+            // 发送失败时清理已注册的请求
+            for paint_id in &paint_ids {
+                let _ = self.response_tracker.remove_request(*paint_id).await;
+            }
+            return Err(e);
+        }
 
         // Emit own_paint_event for each operation
         let event_bus = EventBus::global();
@@ -368,6 +400,11 @@ impl WsProvider {
         }
 
         if let Some(handle) = self.message_task_handle.take() {
+            handle.abort();
+        }
+
+        // 停止清理任务
+        if let Some(handle) = self.cleanup_task_handle.take() {
             handle.abort();
         }
 
