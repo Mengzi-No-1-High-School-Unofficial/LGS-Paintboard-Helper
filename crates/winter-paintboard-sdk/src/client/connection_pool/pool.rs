@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore, OwnedSemaphorePermit};
+use tokio::time::timeout;
 
 use crate::{config::Config, error::PaintboardError, BasicClient, PaintboardClientTrait};
 
@@ -547,24 +548,32 @@ impl ConnectionPool {
 
     /// 检查连接是否健康
     pub async fn is_connection_healthy(&self, client: &mut BasicClient) -> bool {
-        // 尝试执行一个简单的操作来检查连接健康状态
-        // 这里可以是获取当前画板状态的前几个像素或其他轻量级操作
-        match client.get_board().await {
-            Ok(_) => {
-                // 如果能成功获取画板数据，说明连接是健康的
+        // 5秒超时，对于健康检查来说足够了
+        match timeout(Duration::from_secs(5), client.get_board()).await {
+            Ok(Ok(_)) => {
+                // 成功获取画板数据，连接健康
                 true
             }
-            Err(e) => {
-                // 根据错误类型判断连接是否健康
+            Ok(Err(e)) => {
+                // 请求返回错误，根据错误类型判断
                 match e {
-                    // 这些错误表示连接不健康，需要替换
                     PaintboardError::Network(_)
                     | PaintboardError::WebSocket(_)
                     | PaintboardError::ConnectionClosed
-                    | PaintboardError::Timeout => false,
-                    // 其他错误可能不表示连接问题
-                    _ => true, // 在不确定的情况下，假设连接仍健康
+                    | PaintboardError::Timeout => {
+                        log::debug!("连接不健康: {:?}", e);
+                        false
+                    }
+                    _ => {
+                        // 其他错误不一定表示连接问题
+                        true
+                    }
                 }
+            }
+            Err(_) => {
+                // 超时，连接不健康
+                log::debug!("健康检查超时，连接被视为不健康");
+                false
             }
         }
     }

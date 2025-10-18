@@ -22,6 +22,7 @@ use crate::app::{
 };
 
 use crate::app::cli::Commands;
+use crate::app::utils::{create_authenticated_client, resolve_auth_token};
 
 /// Main application logic for drawing an image to the paintboard
 pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -165,41 +166,14 @@ async fn run_incremental_mode(
     max_batch_size: usize,
     client_type: winter_paintboard_sdk::ClientType,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Validate authentication arguments
-    let token = match validate_auth_args(&token, &access_key) {
-        Ok(token) => {
-            if token.is_empty() {
-                // Need to get token using access key
-                if let Some(access_key) = &access_key {
-                    get_token_with_access_key(uid, access_key).await?
-                } else {
-                    error!("错误: 必须提供 --token 或 --access_key");
-                    std::process::exit(1);
-                }
-            } else {
-                token
-            }
-        }
-        Err(e) => {
+    // 使用新的辅助函数处理认证
+    let token = resolve_auth_token(token, uid, access_key).await
+        .unwrap_or_else(|e| {
             error!("{}", e);
             std::process::exit(1);
-        }
-    };
+        });
 
-    // Initialize paintboard client config
-    info!("正在初始化绘板客户端...");
-    let mut config = Config::default(); // 使用默认配置
-                                        // 确保使用正确的WebSocket端点
-    config.ws_url = ws_url
-        .clone()
-        .unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
-    let client_box = create_client(config, client_type).await?;
-    let client = std::sync::Arc::new(tokio::sync::Mutex::new(client_box));
-    {
-        // 设置认证信息（通过加锁设置）
-        let mut cl = client.lock().await;
-        cl.as_mut().set_auth(uid, token.to_string());
-    }
+    let client = create_authenticated_client(ws_url.clone(), client_type, uid, token.clone()).await?;
 
     // 检查是否启用本地同步
     info!("启用本地绘版数据同步...");
@@ -287,41 +261,14 @@ async fn run_draw_loop_mode(
     progressive: String,
     client_type: winter_paintboard_sdk::ClientType,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Validate authentication arguments
-    let token = match validate_auth_args(&token, &access_key) {
-        Ok(token) => {
-            if token.is_empty() {
-                // Need to get token using access key
-                if let Some(access_key) = &access_key {
-                    get_token_with_access_key(uid, access_key).await?
-                } else {
-                    error!("错误: 必须提供 --token 或 --access_key");
-                    std::process::exit(1);
-                }
-            } else {
-                token
-            }
-        }
-        Err(e) => {
+    // 使用新的辅助函数处理认证
+    let token = resolve_auth_token(token, uid, access_key).await
+        .unwrap_or_else(|e| {
             error!("{}", e);
             std::process::exit(1);
-        }
-    };
+        });
 
-    // Initialize paintboard client config
-    info!("正在初始化绘板客户端...");
-    let mut config = Config::default(); // 使用默认配置
-                                        // 确保使用正确的WebSocket端点
-    config.ws_url = ws_url
-        .clone()
-        .unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
-    let client_box = create_client(config, client_type).await?;
-    let client = std::sync::Arc::new(tokio::sync::Mutex::new(client_box));
-    {
-        // 设置认证信息（通过加锁设置）
-        let mut cl = client.lock().await;
-        cl.as_mut().set_auth(uid, token.to_string());
-    }
+    let client = create_authenticated_client(ws_url.clone(), client_type, uid, token.clone()).await?;
 
     // Determine progressive mode
     let progressive_mode = ProgressiveMode::from_string(&progressive);
@@ -367,41 +314,14 @@ async fn run_draw_once_mode(
     wait_for_completion: bool,
     client_type: winter_paintboard_sdk::ClientType,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Validate authentication arguments
-    let token = match validate_auth_args(&token, &access_key) {
-        Ok(token) => {
-            if token.is_empty() {
-                // Need to get token using access key
-                if let Some(access_key) = &access_key {
-                    get_token_with_access_key(uid, access_key).await?
-                } else {
-                    error!("错误: 必须提供 --token 或 --access_key");
-                    std::process::exit(1);
-                }
-            } else {
-                token
-            }
-        }
-        Err(e) => {
+    // 使用新的辅助函数处理认证
+    let token = resolve_auth_token(token, uid, access_key).await
+        .unwrap_or_else(|e| {
             error!("{}", e);
             std::process::exit(1);
-        }
-    };
+        });
 
-    // Initialize paintboard client config
-    info!("正在初始化绘板客户端...");
-    let mut config = Config::default(); // 使用默认配置
-                                        // 确保使用正确的WebSocket端点
-    config.ws_url = ws_url
-        .clone()
-        .unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
-    let client_box = create_client(config, client_type).await?;
-    let client = std::sync::Arc::new(tokio::sync::Mutex::new(client_box));
-    {
-        // 设置认证信息（通过加锁设置）
-        let mut cl = client.lock().await;
-        cl.as_mut().set_auth(uid, token.to_string());
-    }
+    let client = create_authenticated_client(ws_url.clone(), client_type, uid, token.clone()).await?;
 
     // Determine progressive mode
     let progressive_mode = ProgressiveMode::from_string(&progressive);
