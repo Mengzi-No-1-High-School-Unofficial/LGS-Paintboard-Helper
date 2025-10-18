@@ -2,8 +2,8 @@
 name = "winter-paintboard-sdk"
 version = "0.1.0"
 edition = "2021"
-description = "SDK for Winter Paintboard 2026 API"
-authors = ["Your Name <your.email@example.com>"]
+description = "SDK for LGS Winter Paintboard 2026 API"
+authors = ["Xyber Nova <xyber-nova@outlook.com>"]
 
 [dependencies]
 tokio = { version = "1.0", features = ["full"] }

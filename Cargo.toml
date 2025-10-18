@@ -2,6 +2,10 @@
 name = "lgs-paintboard"
 version = "0.1.0"
 edition = "2021"
+description = "一个用于在 LGS 冬日绘板上绘画的小工具"
+authors = ["Xyber Nova <xyber-nova@outlook.com>"]
+license = "AGPL 3.0"
+license-file = "./LICENSE"
 
 [workspace]
 members = [
