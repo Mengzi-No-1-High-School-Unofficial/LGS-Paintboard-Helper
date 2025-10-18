@@ -1,5 +1,9 @@
-use log::info;
-use winter_paintboard_sdk::{config::Config, BasicClient, PaintboardClientTrait};
+use log::{error, info};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use winter_paintboard_sdk::{config::Config, BasicClient, ClientType, PaintboardClientTrait};
+
+use crate::app::drawing::create_client;
 
 /// Gets a token using UID and access key
 pub async fn get_token_with_access_key(
@@ -37,4 +41,53 @@ pub fn validate_auth_args(
     }
 
     Err("必须提供 --token 或 --access-key")
+}
+
+/// 处理认证参数，返回有效的token
+pub async fn resolve_auth_token(
+    token: Option<String>,
+    uid: u32,
+    access_key: Option<String>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let token = match validate_auth_args(&token, &access_key) {
+        Ok(token) => {
+            if token.is_empty() {
+                if let Some(access_key) = &access_key {
+                    get_token_with_access_key(uid, access_key).await?
+                } else {
+                    return Err("错误: 必须提供 --token 或 --access_key".into());
+                }
+            } else {
+                token
+            }
+        }
+        Err(e) => {
+            return Err(e.into());
+        }
+    };
+    Ok(token)
+}
+
+/// 创建并配置已认证的客户端
+pub async fn create_authenticated_client(
+    ws_url: Option<String>,
+    client_type: ClientType,
+    uid: u32,
+    token: String,
+) -> Result<Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>, Box<dyn std::error::Error>> {
+    info!("正在初始化绘板客户端...");
+    
+    let mut config = Config::default();
+    config.ws_url = ws_url
+        .unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
+    
+    let client_box = create_client(config, client_type).await?;
+    let client = Arc::new(Mutex::new(client_box));
+    
+    {
+        let mut cl = client.lock().await;
+        cl.as_mut().set_auth(uid, token);
+    }
+    
+    Ok(client)
 }
