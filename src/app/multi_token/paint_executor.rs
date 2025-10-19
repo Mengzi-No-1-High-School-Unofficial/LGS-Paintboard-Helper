@@ -1,3 +1,4 @@
+use std::f32::consts::E;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -5,6 +6,7 @@ use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
 use log::{debug, error, info, warn};
 
+use winter_paintboard_sdk::PoolClient;
 use winter_paintboard_sdk::{PaintboardClientTrait, models::PaintStatus};
 use crate::app::board_sync::local_board::{LocalBoard, PixelSource};
 use super::paint_request::PaintRequest;
@@ -38,7 +40,7 @@ impl PaintRequestQueue {
 /// 单线程绘制执行器
 #[derive(Clone)]
 pub struct PaintExecutor {
-    client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
+    client: Arc<PoolClient>,
     request_queue: Arc<PaintRequestQueue>,
     local_board: Arc<Mutex<LocalBoard>>,
     pixel_queue: Arc<crate::app::multi_token::pixel_queue::PixelQueue>,
@@ -46,7 +48,7 @@ pub struct PaintExecutor {
 
 impl PaintExecutor {
     pub fn new(
-        client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
+        client: Arc<PoolClient>,
         request_queue: Arc<PaintRequestQueue>,
         local_board: Arc<Mutex<LocalBoard>>,
         pixel_queue: Arc<crate::app::multi_token::pixel_queue::PixelQueue>,
@@ -88,9 +90,19 @@ impl PaintExecutor {
             request.pixel.pos.x, request.pixel.pos.y, request.token_lease.uid());
         
         let result = {
-            let mut client = self.client.lock().await;
-            debug!("获取客户端锁成功，开始绘制");
-            let paint_result = client.paint_with_token(
+            let mut client = &self.client;
+            let conn = client.get_write_conn().await;
+
+            if let Err(e) = conn {
+                error!("无法获取连接，绘制请求取消并等待重试: {:?}", e);
+                return
+            }
+
+            let mut conn = conn.unwrap();
+
+            debug!("获取客户端成功，开始绘制");
+
+            let paint_result = conn.paint_with_token(
                 request.pixel.pos,
                 request.pixel.color,
                 request.token_lease.uid(),
@@ -98,6 +110,7 @@ impl PaintExecutor {
             ).await;
             debug!("绘制操作完成: ({}, {}), 结果: {:?}",
                 request.pixel.pos.x, request.pixel.pos.y, paint_result);
+
             paint_result
         };
 

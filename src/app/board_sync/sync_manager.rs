@@ -223,7 +223,7 @@ impl BoardSyncManager {
                                 // 在同步期间，将事件添加到待处理列表中
                                 let mut pending = pending_events.lock().await;
                                 pending.push(event.clone());
-                                debug!("同步进行中，缓存事件: {:?}", event);
+                                // debug!("同步进行中，缓存事件: {:?}", event);
                                 continue; // 跳过事件处理
                             }
                             drop(sync_flag); // 释放锁
@@ -250,14 +250,14 @@ impl BoardSyncManager {
     async fn process_event(local_board: &Arc<Mutex<LocalBoard>>, event: Event) {
         match event {
             Event::OwnPaintEvent { pos, color } => {
-                debug!("处理自己的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
+                // debug!("处理自己的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
                 {
                     let mut board = local_board.lock().await;
                     board.update_pixel(pos.x, pos.y, color, PixelSource::Own);
                 }
             }
             Event::OtherPaintEvent { pos, color } => {
-                debug!("处理他人的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
+                // debug!("处理他人的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
                 {
                     let mut board = local_board.lock().await;
                     board.update_pixel(pos.x, pos.y, color, PixelSource::Other);

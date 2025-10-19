@@ -1,5 +1,5 @@
 use crate::{event::EventBus, models::{ProtocolMessage, OpCode, PaintResult, PaintStatus, Pos, Rgb}};
-use crate::client::ws_provider::ws_response_tracker::WsResponseTracker;
+use crate::basic_client::ws_provider::ws_response_tracker::WsResponseTracker;
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 use tokio_tungstenite::tungstenite::protocol::Message;
@@ -29,9 +29,10 @@ impl WsMessageHandler {
     ) {
         match message {
             Message::Binary(data) => {
-                debug!("📨 收到二进制消息，长度: {} 字节，前10字节: {:?}",
-                    data.len(),
-                    &data[..std::cmp::min(10, data.len())]);
+                // debug!("📨 收到二进制消息，长度: {} 字节，前10字节: {:?}",
+                    // data.len(),
+                    // &data[..std::cmp::min(10, data.len())]);
+
                 if let Ok(protocol_msg) = ProtocolMessage::parse(&data) {
                     match protocol_msg {
                         ProtocolMessage::HeartbeatPing => {
@@ -80,8 +81,8 @@ impl WsMessageHandler {
                         }
 
                         ProtocolMessage::PaintEvent { pos, color } => {
-                            debug!("🖌️  收到其他用户绘图事件: ({}, {}) RGB({}, {}, {})",
-                                pos.x, pos.y, color.r, color.g, color.b);
+                            // debug!("🖌️  收到其他用户绘图事件: ({}, {}) RGB({}, {}, {})",
+                                // pos.x, pos.y, color.r, color.g, color.b);
                             let _ = EventBus::global().send(crate::event::Event::other_paint_event(pos, color));
                         }
 
@@ -90,7 +91,7 @@ impl WsMessageHandler {
                         }
 
                         other => {
-                            debug!("📨 收到其他协议消息: {:?}", other);
+                            // debug!("📨 收到其他协议消息: {:?}", other);
                         }
                     }
                 } else {

@@ -4,7 +4,7 @@
 //! Provides functionality for painting, authentication, and real-time events.
 
 /// 客户端模块，包含与Paintboard API交互的不同客户端实现。
-pub mod client;
+pub mod basic_client;
 /// 配置模块，包含了SDK的各种配置选项。
 pub mod config;
 /// 错误处理模块，定义了SDK特有的错误类型。
@@ -15,11 +15,15 @@ pub mod event;
 pub mod models;
 /// 实用工具模块，提供辅助函数和数据结构。
 pub mod utils;
+/// 连接池工具
+pub mod pool_client;
 
 /// 从客户端模块导出主要客户端类型和工厂函数。
-pub use client::{
+pub use basic_client::{
     create_client_by_type, BasicClient, ClientType, PaintboardClientTrait,
 };
+/// 从连接池模块导出连接池客户端。
+pub use pool_client::PoolClient;
 /// 导出SDK的统一错误类型。
 pub use error::PaintboardError;
 /// 从数据模型模块导出常用的数据结构。

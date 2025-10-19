@@ -23,14 +23,8 @@ pub trait PaintboardClientTrait {
     where
         Self: Sized;
 
-    /// 设置客户端的认证信息。
-    ///
-    /// 调用此方法将更新客户端的用户 ID (UID) 和认证令牌，
-    /// 这些信息将用于后续的所有认证请求。
-    ///
-    /// # 参数
-    /// - `uid`: 用户的唯一标识符。
-    /// - `token`: 用于 API 请求的认证令牌。
+    /// 设置客户端的认证信息 (deprecated - use methods with auth parameters)
+    #[deprecated(note = "Use methods that accept auth parameters instead")]
     fn set_auth(&mut self, uid: u32, token: String);
 
     /// 获取当前画板的完整数据。
@@ -55,31 +49,12 @@ pub trait PaintboardClientTrait {
     /// 失败时包含 `PaintboardError` (例如，认证失败或网络问题)。
     async fn get_token(&self, uid: u32, access_key: &str) -> Result<String, PaintboardError>;
 
-    /// 在画板的指定位置绘制一个像素。
-    ///
-    /// 此异步函数将向 API 发送一个绘制单个像素的请求。
-    ///
-    /// # 参数
-    /// - `pos`: `Pos` 结构体，表示要绘制像素的 (x, y) 坐标。
-    /// - `color`: `Rgb` 结构体，表示像素的颜色。
-    ///
-    /// # 返回
-    /// `Result`，成功时包含 `PaintResult`，表示绘制操作的结果 (例如，成功或失败原因)，
-    /// 失败时包含 `PaintboardError`。
+    /// 在画板的指定位置绘制一个像素 (deprecated - use paint_with_auth)
+    #[deprecated(note = "Use paint_with_auth instead")]
     async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError>;
 
-    /// 批量绘制多个像素。
-    ///
-    /// 此异步函数将向 API 发送一个包含多个像素绘制操作的批量请求。
-    /// 批量操作通常比发送单个像素请求更高效。
-    ///
-    /// # 参数
-    /// - `operations`: 一个 `Vec`，其中每个元素是一个包含 `Pos` 和 `Rgb` 的元组，
-    ///   表示要绘制的每个像素的位置和颜色。
-    ///
-    /// # 返回
-    /// `Result`，成功时返回 `()` (表示操作成功但没有特定返回值)，
-    /// 失败时包含 `PaintboardError`。
+    /// 批量绘制多个像素 (deprecated - use paint_batch_with_auth)
+    #[deprecated(note = "Use paint_batch_with_auth instead")]
     async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError>;
 
     /// 获取客户端配置信息。
@@ -105,4 +80,33 @@ pub trait PaintboardClientTrait {
         uid: u32,
         token: String,
     ) -> Result<crate::models::PaintResult, PaintboardError>;
+
+    /// 使用提供的认证信息绘制一个像素 (新方法)
+    ///
+    /// # 参数
+    /// - `pos`: 像素位置。
+    /// - `color`: 像素颜色。
+    /// - `uid`: 用户ID。
+    /// - `token`: 认证令牌。
+    ///
+    /// # 返回
+    /// `Result`，成功时包含 `PaintResult`，失败时包含 `PaintboardError`。
+    async fn paint_with_auth(&mut self, pos: Pos, color: Rgb, uid: u32, token: &str) -> Result<PaintResult, PaintboardError> {
+        // 默认实现：如果实现者没有提供此方法，则返回错误
+        Err(PaintboardError::auth("paint_with_auth not implemented".to_string()))
+    }
+
+    /// 使用提供的认证信息批量绘制像素 (新方法)
+    ///
+    /// # 参数
+    /// - `operations`: 包含位置和颜色的操作向量。
+    /// - `uid`: 用户ID。
+    /// - `token`: 认证令牌。
+    ///
+    /// # 返回
+    /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
+    async fn paint_batch_with_auth(&mut self, operations: Vec<(Pos, Rgb)>, uid: u32, token: &str) -> Result<(), PaintboardError> {
+        // 默认实现：如果实现者没有提供此方法，则返回错误
+        Err(PaintboardError::auth("paint_batch_with_auth not implemented".to_string()))
+    }
 }

@@ -15,11 +15,11 @@ use tokio::sync::{Mutex as TokioMutex, oneshot, Notify};
 use tracing::{debug, error, info, trace, warn};
 use url::Url;
 use futures::{SinkExt, StreamExt};
-use crate::client::ws_provider::ws_connection::WsConnection;
-use crate::client::ws_provider::ws_response_tracker::WsResponseTracker;
-use crate::client::ws_provider::ws_message_handler::WsMessageHandler;
-use crate::client::ws_provider::ws_reconnect::WsReconnectStrategy;
-use crate::client::ws_provider::ws_rate_limiter::WsRateLimiter;
+use crate::basic_client::ws_provider::ws_connection::WsConnection;
+use crate::basic_client::ws_provider::ws_response_tracker::WsResponseTracker;
+use crate::basic_client::ws_provider::ws_message_handler::WsMessageHandler;
+use crate::basic_client::ws_provider::ws_reconnect::WsReconnectStrategy;
+use crate::basic_client::ws_provider::ws_rate_limiter::WsRateLimiter;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio::time::{timeout, Duration, interval};
 use tokio::task::JoinHandle;
@@ -31,8 +31,6 @@ const MAX_PACKET_SIZE: usize = 32 * 1024; // 32 KB
 pub struct WsProvider {
     config: Arc<Config>,
     connection: Arc<WsConnection>,
-    uid: Option<u32>,
-    token: Option<String>,
     response_tracker: Arc<WsResponseTracker>,
     message_handler: Arc<WsMessageHandler>,
     message_task_handle: Option<JoinHandle<()>>,
@@ -68,8 +66,6 @@ impl WsProvider {
         Ok(Self {
             config,
             connection,
-            uid: None,
-            token: None,
             response_tracker,
             message_handler,
             message_task_handle: None,
@@ -80,10 +76,11 @@ impl WsProvider {
         })
     }
 
-    /// Set the user ID and token for authentication
-    pub fn set_auth(&mut self, uid: u32, token: String) {
-        self.uid = Some(uid);
-        self.token = Some(token);
+    /// Set the user ID and token for authentication (deprecated - use methods with auth parameters)
+    #[deprecated(note = "Use methods that accept auth parameters instead")]
+    pub fn set_auth(&mut self, _uid: u32, _token: String) {
+        // This method is deprecated in the new architecture
+        // Authentication is now passed as parameters to each method
     }
 
     /// Connect to the WebSocket server and start background processing
@@ -215,8 +212,14 @@ impl WsProvider {
         }));
     }
 
-    /// Paint a pixel at the given position with the specified color
-    pub async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError> {
+    /// Paint a pixel at the given position with the specified color using provided authentication
+    pub async fn paint_with_auth(
+        &mut self,
+        pos: Pos,
+        color: Rgb,
+        uid: u32,
+        token: &str,
+    ) -> Result<PaintResult, PaintboardError> {
         // Rate limiting: silent drop when limited
         if !self.rate_limiter.check() {
             debug!(
@@ -230,16 +233,12 @@ impl WsProvider {
             });
         }
 
-        // Authentication
-        let uid = self.uid.ok_or(PaintboardError::auth("UID not set".to_string()))?;
-        let token = self.token.clone().ok_or(PaintboardError::auth("Token not set".to_string()))?;
-
         // Generate unique paint id first (needed for logging)
         let paint_id = rand::random::<u64>();
 
         // Ensure connected
         let is_connected = self.connection.is_connected().await;
-        debug!("paint() - 连接状态检查结果: {} (paint_id: {})", is_connected, paint_id);
+        debug!("paint_with_auth() - 连接状态检查结果: {} (paint_id: {})", is_connected, paint_id);
         if !is_connected {
             debug!("连接不存在，建立新连接 (paint_id: {})", paint_id);
             self.connection.connect().await?;
@@ -248,12 +247,12 @@ impl WsProvider {
             debug!("连接已存在，尝试复用连接 (paint_id: {})", paint_id);
         }
 
-        // Create operation
+        // Create operation with provided authentication
         let operation = PaintOperation {
             pos,
             color,
             token_uid: uid,
-            token,
+            token: token.to_string(),
             paint_id: paint_id as u32,
         };
 
@@ -313,10 +312,18 @@ impl WsProvider {
         }
     }
 
+    /// Paint a pixel at the given position with the specified color (deprecated - use paint_with_auth)
+    #[deprecated(note = "Use paint_with_auth instead")]
+    pub async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError> {
+        Err(PaintboardError::auth("Authentication required. Use paint_with_auth instead.".to_string()))
+    }
+
     /// Send multiple paint operations together using sticky packet mechanism, without waiting for responses
-    pub async fn paint_batch(
+    pub async fn paint_batch_with_auth(
         &mut self,
         operations: Vec<(Pos, Rgb)>,
+        uid: u32,
+        token: &str,
     ) -> Result<(), PaintboardError> {
         let ops_count = operations.len();
         debug!("开始发送批量绘图请求，操作数量: {}", ops_count);
@@ -334,10 +341,6 @@ impl WsProvider {
             return Ok(());
         }
 
-        // Authentication
-        let uid = self.uid.ok_or(PaintboardError::auth("UID not set".to_string()))?;
-        let token = self.token.clone().ok_or(PaintboardError::auth("Token not set".to_string()))?;
-
         let mut all_binary = Vec::new();
         let mut paint_ids = Vec::new(); // 存储paint_id用于清理
         
@@ -347,7 +350,7 @@ impl WsProvider {
                 pos: *pos,
                 color: *color,
                 token_uid: uid,
-                token: token.clone(),
+                token: token.to_string(),
                 paint_id: paint_id as u32,
             };
             all_binary.extend(op.to_binary());
@@ -399,6 +402,15 @@ impl WsProvider {
         }
 
         Ok(())
+    }
+
+    /// Send multiple paint operations together using sticky packet mechanism, without waiting for responses (deprecated - use paint_batch_with_auth)
+    #[deprecated(note = "Use paint_batch_with_auth instead")]
+    pub async fn paint_batch(
+        &mut self,
+        operations: Vec<(Pos, Rgb)>,
+    ) -> Result<(), PaintboardError> {
+        Err(PaintboardError::auth("Authentication required. Use paint_batch_with_auth instead.".to_string()))
     }
 
     /// Send a heartbeat (PONG) response
@@ -462,7 +474,7 @@ impl WsProvider {
         Ok(())
     }
     
-    /// 使用临时 Token 绘制像素（不修改客户端状态）
+    /// 使用临时 Token 绘制像素（现在直接使用认证参数）
     pub async fn paint_with_token(
         &mut self,
         pos: Pos,
@@ -470,81 +482,7 @@ impl WsProvider {
         uid: u32,
         token: String,
     ) -> Result<PaintResult, PaintboardError> {
-        // 临时保存当前认证信息
-        let old_uid = self.uid;
-        let old_token = self.token.clone();
-        
-        // 设置临时认证信息
-        self.set_auth(uid, token);
-        
-        // 确保连接并绘制
-        if !self.connection.is_connected().await {
-            debug!("连接不存在，建立新连接");
-            self.connection.connect().await?;
-        } else {
-            debug!("连接已存在，复用连接");
-        }
-        
-        let paint_id = rand::random::<u64>();
-        let operation = PaintOperation {
-            pos,
-            color,
-            token_uid: uid,
-            token: self.token.clone().unwrap_or_default(),
-            paint_id: paint_id as u32,
-        };
-        
-        let binary_data = operation.to_binary();
-        
-        // 单次绘图大小检查
-        if binary_data.len() > MAX_PACKET_SIZE {
-            return Err(PaintboardError::invalid_data(
-                format!(
-                    "绘图消息大小 {} 字节超过限制 {} 字节 ({}KB)",
-                    binary_data.len(),
-                    MAX_PACKET_SIZE,
-                    MAX_PACKET_SIZE / 1024
-                )
-            ));
-        }
-        
-        trace!(
-            "绘图操作二进制数据长度: {}, 前几个字节: {:?}",
-            binary_data.len(),
-            &binary_data[..std::cmp::min(10, binary_data.len())]
-        );
-        
-        // 注册响应接收器
-        let response_rx = self.response_tracker.register_request(paint_id).await;
-        
-        // 发送二进制数据
-        self.connection.send_binary(binary_data).await.map_err(|e| {
-            error!("发送绘图消息失败: {:?}", e);
-            e
-        })?;
-        
-        // 等待响应（带超时）
-        let result = match timeout(Duration::from_secs(10), response_rx).await {
-            Ok(Ok(result)) => {
-                debug!("成功接收到绘图结果");
-                Ok(result)
-            }
-            Ok(Err(_)) => {
-                debug!("响应通道关闭");
-                Err(PaintboardError::ResponseChannelClosed)
-            }
-            Err(_) => {
-                debug!("等待响应超时，清理通道");
-                let _ = self.response_tracker.remove_request(paint_id).await;
-                Err(PaintboardError::timeout())
-            }
-        };
-        
-        // 恢复原始认证信息
-        if let Some(old_uid) = old_uid {
-            self.set_auth(old_uid, old_token.unwrap_or_default());
-        }
-        
-        result
+        // 直接使用提供的认证信息，无需保存/恢复状态
+        self.paint_with_auth(pos, color, uid, &token).await
     }
 }

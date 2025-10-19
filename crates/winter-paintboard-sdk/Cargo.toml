@@ -22,6 +22,7 @@ uuid = { version = "1.0", features = ["v4"] }
 async-trait = "0.1"
 governor = { version = "0.6", features = ["std"] }
 tracing = "0.1.41"
+deadpool = { version = "0.12.3", features = ["rt_tokio_1"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

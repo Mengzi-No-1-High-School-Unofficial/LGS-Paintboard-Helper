@@ -5,6 +5,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::time::interval;
 use log::{debug, error, info, warn};
 
+use winter_paintboard_sdk::PoolClient;
 use winter_paintboard_sdk::{PaintboardClientTrait, BasicClient, config::Config};
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
@@ -29,7 +30,7 @@ pub struct MultiTokenService {
     stop_signal: Arc<AtomicBool>,
     comparison_interval: Duration,
     token_manager: Arc<TokenManager>,
-    shared_client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
+    shared_client: Arc<PoolClient>,
 }
 
 impl MultiTokenService {
@@ -65,8 +66,7 @@ impl MultiTokenService {
         if let Some(url) = ws_url {
             config.ws_url = url;
         }
-        let shared_client = BasicClient::new(config).await?;
-        let shared_client: Box<dyn PaintboardClientTrait + Send> = Box::new(shared_client);
+        let shared_client = PoolClient::new(config).await?;
 
         // 创建 TokenManager
         let token_manager = Arc::new(TokenManager::new(tokens, token_config.cd_time_ms));
@@ -84,7 +84,7 @@ impl MultiTokenService {
             stop_signal: Arc::new(AtomicBool::new(false)),
             comparison_interval,
             token_manager,
-            shared_client: Arc::new(Mutex::new(shared_client)),
+            shared_client: Arc::new(shared_client),
         })
     }
 
@@ -109,7 +109,8 @@ impl MultiTokenService {
         }));
 
         // 为每个 Token 创建 Worker
-        let ws_url = self.shared_client.lock().await.get_config().ws_url.clone();
+        let ws_url = self.shared_client.get_config().ws_url.clone();
+
         for i in 0..self.token_manager.len() {
             let token_manager = self.token_manager.clone();
             let pixel_queue = self.pixel_queue.clone();
