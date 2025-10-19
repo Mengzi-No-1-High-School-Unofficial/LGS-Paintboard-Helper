@@ -280,7 +280,7 @@ pub enum Commands {
 
 fn parse_client_type(s: &str) -> Result<winter_paintboard_sdk::ClientType, String> {
     match s.to_lowercase().as_str() {
-        "pool" | "connection_pool" => Ok(winter_paintboard_sdk::ClientType::ConnectionPool),
+        "pool" | "connection_pool" => unimplemented!("Connection Pool 不存在"),
         "basic" => Ok(winter_paintboard_sdk::ClientType::Basic),
         _ => Err(format!("Invalid client type: {}", s)),
     }
