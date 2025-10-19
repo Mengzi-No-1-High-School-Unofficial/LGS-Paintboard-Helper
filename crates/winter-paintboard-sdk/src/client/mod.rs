@@ -1,8 +1,6 @@
 //! `client` 模块提供了与 Winter Paintboard API 交互的不同客户端实现。
 //! 它包括基础客户端、连接池客户端以及用于处理HTTP和WebSocket通信的提供者。
 
-#[macro_use]
-mod connection_pool;
 mod batch_client;
 mod factory;
 mod http_client;
@@ -11,8 +9,6 @@ mod ws_provider;
 
 /// 导出批量操作助手。
 pub use batch_client::BatchHelper;
-/// 从连接池模块导出连接池客户端、连接守卫、连接池指标和监控任务启动函数。
-pub use connection_pool::{start_monitoring_task, ConnectionGuard, PoolClient, PoolMetrics};
 /// 从工厂模块导出客户端类型枚举和客户端创建工厂函数。
 pub use factory::{create_client_by_type, ClientType};
 /// 导出 HTTP 客户端提供者。

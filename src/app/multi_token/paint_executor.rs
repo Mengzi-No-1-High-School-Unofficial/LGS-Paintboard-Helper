@@ -36,6 +36,7 @@ impl PaintRequestQueue {
 }
 
 /// 单线程绘制执行器
+#[derive(Clone)]
 pub struct PaintExecutor {
     client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
     request_queue: Arc<PaintRequestQueue>,
@@ -71,7 +72,11 @@ impl PaintExecutor {
                 }
             };
 
-            self.process_request(request).await;
+            // self.process_request(request).await;
+            let self_clone = self.clone();
+            tokio::spawn(async move {
+                self_clone.process_request(request).await
+            });
         }
 
         info!("PaintExecutor 停止");
