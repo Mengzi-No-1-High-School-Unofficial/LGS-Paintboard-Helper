@@ -15,7 +15,7 @@ members = [
 [dependencies]
 clap = { workspace = true }
 image = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["tracing"] }
 winter-paintboard-sdk = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
@@ -25,6 +25,7 @@ tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 parking_lot.workspace = true
+console-subscriber = "0.4.1"
 
 [workspace.dependencies]
 clap = { version = "4.0", features = ["derive"] }

@@ -153,7 +153,7 @@ impl PaintExecutor {
                     }
                     PaintStatus::Cooldown => {
                         // 不必处理重试，循环比对会忽略
-                        debug!("Token {} 仍在 CD 中", request.token_lease.uid());
+                        info!("Token {} 仍在 CD 中", request.token_lease.uid());
                     }
                     _ => {
                         warn!("绘制失败: {:?}", paint_result.status);
