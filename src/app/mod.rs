@@ -195,17 +195,17 @@ pub async fn run_multi_token_mode(
     use crate::app::board_sync::BoardSyncManager;
     use crate::app::image_processing::process_image_at_all_scales;
     use crate::app::multi_token::multi_token_service::MultiTokenService;
-    use winter_paintboard_sdk::{BasicClient, config::Config, PaintboardClientTrait};
+    use winter_paintboard_sdk::{config::Config, BasicClient, PaintboardClientTrait};
 
     info!("启动多 Token 绘制模式...");
-    
+
     // 加载配置
     let token_config = crate::app::multi_token::config::TokenConfig::from_file(&config_path)?;
-    
+
     // 创建同步管理器
     let event_bus = winter_paintboard_sdk::event::EventBus::global();
     let sync_manager = BoardSyncManager::new(&event_bus);
-    
+
     // 为同步任务创建新的客户端
     let mut sync_config = Config::default();
     if let Some(url) = &ws_url {
@@ -224,7 +224,7 @@ pub async fn run_multi_token_mode(
         };
         sync_client.set_auth(first_token.uid, token);
     }
-    
+
     // 启动增量同步循环
     sync_manager
         .start_incremental_sync_loop(
@@ -232,16 +232,16 @@ pub async fn run_multi_token_mode(
             tokio::time::Duration::from_millis(comparison_interval),
         )
         .await?;
-    
+
     // 启动事件监听（增量更新）
     sync_manager.start_event_listener().await?;
-    
+
     info!("本地绘版数据同步已启动");
-    
+
     // 处理图片
     info!("正在预处理图片数据...");
     let processed_image_data = process_image_at_all_scales(&image, width, height, x, y)?;
-    
+
     // 创建并启动多 Token 服务
     let mut service = MultiTokenService::new(
         token_config,
@@ -251,16 +251,17 @@ pub async fn run_multi_token_mode(
         x,
         y,
         tokio::time::Duration::from_millis(comparison_interval),
-    ).await?;
-    
+    )
+    .await?;
+
     service.start().await?;
-    
+
     info!("多 Token 模式已启动，按 Ctrl+C 停止...");
     tokio::signal::ctrl_c().await?;
-    
+
     // 清理
     service.stop().await?;
-    
+
     Ok(())
 }
 
@@ -280,13 +281,15 @@ async fn run_incremental_mode(
     client_type: winter_paintboard_sdk::ClientType,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // 使用新的辅助函数处理认证
-    let token = resolve_auth_token(token, uid, access_key).await
+    let token = resolve_auth_token(token, uid, access_key)
+        .await
         .unwrap_or_else(|e| {
             error!("{}", e);
             std::process::exit(1);
         });
 
-    let client = create_authenticated_client(ws_url.clone(), client_type, uid, token.clone()).await?;
+    let client =
+        create_authenticated_client(ws_url.clone(), client_type, uid, token.clone()).await?;
 
     // 检查是否启用本地同步
     info!("启用本地绘版数据同步...");
@@ -375,13 +378,15 @@ async fn run_draw_loop_mode(
     client_type: winter_paintboard_sdk::ClientType,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // 使用新的辅助函数处理认证
-    let token = resolve_auth_token(token, uid, access_key).await
+    let token = resolve_auth_token(token, uid, access_key)
+        .await
         .unwrap_or_else(|e| {
             error!("{}", e);
             std::process::exit(1);
         });
 
-    let client = create_authenticated_client(ws_url.clone(), client_type, uid, token.clone()).await?;
+    let client =
+        create_authenticated_client(ws_url.clone(), client_type, uid, token.clone()).await?;
 
     // Determine progressive mode
     let progressive_mode = ProgressiveMode::from_string(&progressive);
@@ -428,13 +433,15 @@ async fn run_draw_once_mode(
     client_type: winter_paintboard_sdk::ClientType,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // 使用新的辅助函数处理认证
-    let token = resolve_auth_token(token, uid, access_key).await
+    let token = resolve_auth_token(token, uid, access_key)
+        .await
         .unwrap_or_else(|e| {
             error!("{}", e);
             std::process::exit(1);
         });
 
-    let client = create_authenticated_client(ws_url.clone(), client_type, uid, token.clone()).await?;
+    let client =
+        create_authenticated_client(ws_url.clone(), client_type, uid, token.clone()).await?;
 
     // Determine progressive mode
     let progressive_mode = ProgressiveMode::from_string(&progressive);

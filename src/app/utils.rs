@@ -76,18 +76,18 @@ pub async fn create_authenticated_client(
     token: String,
 ) -> Result<Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>, Box<dyn std::error::Error>> {
     info!("正在初始化绘板客户端...");
-    
+
     let mut config = Config::default();
-    config.ws_url = ws_url
-        .unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
-    
+    config.ws_url =
+        ws_url.unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
+
     let client_box = create_client(config, client_type).await?;
     let client = Arc::new(Mutex::new(client_box));
-    
+
     {
         let mut cl = client.lock().await;
         cl.as_mut().set_auth(uid, token);
     }
-    
+
     Ok(client)
 }

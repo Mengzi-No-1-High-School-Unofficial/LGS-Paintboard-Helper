@@ -56,7 +56,9 @@ impl PoolClient {
         })
     }
 
-    pub async fn get_write_conn(&self) -> Result<deadpool::managed::Object<WriteOnlyManager>, PaintboardError> {
+    pub async fn get_write_conn(
+        &self,
+    ) -> Result<deadpool::managed::Object<WriteOnlyManager>, PaintboardError> {
         self.write_pool.get().await
     }
 }
@@ -99,7 +101,10 @@ impl PaintboardClientTrait for PoolClient {
             // 使用认证信息绘制
             conn.paint_with_auth(pos, color, uid, &token).await
         } else {
-            Err(PaintboardError::auth("Authentication required. Use paint_with_auth or set default auth first.".to_string()))
+            Err(PaintboardError::auth(
+                "Authentication required. Use paint_with_auth or set default auth first."
+                    .to_string(),
+            ))
         }
     }
 
@@ -112,7 +117,10 @@ impl PaintboardClientTrait for PoolClient {
             // 使用认证信息批量绘制
             conn.paint_batch_with_auth(operations, uid, &token).await
         } else {
-            Err(PaintboardError::auth("Authentication required. Use paint_batch_with_auth or set default auth first.".to_string()))
+            Err(PaintboardError::auth(
+                "Authentication required. Use paint_batch_with_auth or set default auth first."
+                    .to_string(),
+            ))
         }
     }
 

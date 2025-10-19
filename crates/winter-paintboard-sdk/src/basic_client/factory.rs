@@ -1,13 +1,11 @@
-use crate::{
-    config::Config, error::PaintboardError, BasicClient, PaintboardClientTrait
-};
+use crate::{config::Config, error::PaintboardError, BasicClient, PaintboardClientTrait};
 use async_trait::async_trait;
 
 /// 客户端类型枚举
 #[derive(Debug, Clone, Copy)]
 pub enum ClientType {
-    Basic,          // 基础单连接客户端
-    Pool,           // 基于连接池的客户端
+    Basic, // 基础单连接客户端
+    Pool,  // 基于连接池的客户端
 }
 
 /// 便捷函数：根据类型创建客户端

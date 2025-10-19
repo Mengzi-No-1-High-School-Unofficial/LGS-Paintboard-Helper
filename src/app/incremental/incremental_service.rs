@@ -219,14 +219,14 @@ pub async fn start_incremental_if_enabled(
 ) -> Result<(), Box<dyn std::error::Error>> {
     if enable_incremental {
         info!("启用增量修改模式");
- 
+
         // 设置认证信息（通过加锁设置）
         {
             let mut cl = client.lock().await;
             cl.as_mut()
                 .set_auth(cli_uid, cli_token.unwrap_or_default().to_string());
         }
- 
+
         // 创建增量管理器（直接传入共享客户端）
         let mut incremental_manager = IncrementalManager::new(
             client.clone(),

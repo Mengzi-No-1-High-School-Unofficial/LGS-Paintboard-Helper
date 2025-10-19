@@ -1,7 +1,7 @@
-use std::time::{Duration, Instant};
-use std::sync::Arc;
+use crate::app::multi_token::token_lease::{TokenData, TokenLease, TokenState};
 use parking_lot::Mutex;
-use crate::app::multi_token::token_lease::{TokenLease, TokenData, TokenState};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Token 信息（保持兼容性）
 #[derive(Debug, Clone)]
@@ -34,7 +34,8 @@ pub struct TokenManager {
 impl TokenManager {
     /// 创建新的 TokenManager
     pub fn new(tokens: Vec<TokenInfo>, cd_time_ms: u64) -> Self {
-        let token_data = tokens.into_iter()
+        let token_data = tokens
+            .into_iter()
             .map(|t| TokenData {
                 uid: t.uid,
                 token: t.token,
@@ -88,16 +89,14 @@ impl TokenManager {
         let tokens = self.tokens.lock();
         let now = Instant::now();
 
-        tokens.iter()
-            .filter_map(|token| {
-                match token.state {
-                    TokenState::Available => Some(Duration::ZERO),
-                    TokenState::InCooldown => {
-                        token.cd_end_time
-                            .and_then(|end| end.checked_duration_since(now))
-                    }
-                    TokenState::Acquired => None,
-                }
+        tokens
+            .iter()
+            .filter_map(|token| match token.state {
+                TokenState::Available => Some(Duration::ZERO),
+                TokenState::InCooldown => token
+                    .cd_end_time
+                    .and_then(|end| end.checked_duration_since(now)),
+                TokenState::Acquired => None,
             })
             .min()
     }

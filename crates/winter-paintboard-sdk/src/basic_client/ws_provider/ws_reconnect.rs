@@ -1,6 +1,6 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Reconnect strategy with exponential backoff and a flag to disable reconnection
 pub struct WsReconnectStrategy {

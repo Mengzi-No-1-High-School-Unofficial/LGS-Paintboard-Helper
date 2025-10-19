@@ -3,7 +3,7 @@ use crate::{
     config::{Config, ConnectionMode},
     error::PaintboardError,
 };
-use deadpool::managed::{Manager, RecycleResult, RecycleError};
+use deadpool::managed::{Manager, RecycleError, RecycleResult};
 use std::sync::Arc;
 
 /// WriteOnly 连接池管理器
@@ -38,7 +38,11 @@ impl Manager for WriteOnlyManager {
     }
 
     /// 回收连接前的健康检查
-    async fn recycle(&self, obj: &mut BasicClient, _metrics: &deadpool::managed::Metrics) -> RecycleResult<PaintboardError> {
+    async fn recycle(
+        &self,
+        obj: &mut BasicClient,
+        _metrics: &deadpool::managed::Metrics,
+    ) -> RecycleResult<PaintboardError> {
         // 轻量检查：只检查健康状态标记
         if obj.is_healthy() {
             tracing::debug!("连接健康检查通过");

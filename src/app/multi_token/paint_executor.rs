@@ -1,15 +1,15 @@
+use log::{debug, error, info, warn};
 use std::f32::consts::E;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
-use log::{debug, error, info, warn};
 
-use winter_paintboard_sdk::PoolClient;
-use winter_paintboard_sdk::{PaintboardClientTrait, models::PaintStatus};
-use crate::app::board_sync::local_board::{LocalBoard, PixelSource};
 use super::paint_request::PaintRequest;
+use crate::app::board_sync::local_board::{LocalBoard, PixelSource};
+use winter_paintboard_sdk::PoolClient;
+use winter_paintboard_sdk::{models::PaintStatus, PaintboardClientTrait};
 
 /// 绘制请求队列
 pub struct PaintRequestQueue {
@@ -27,7 +27,8 @@ impl PaintRequestQueue {
     }
 
     pub fn send(&self, request: PaintRequest) -> Result<(), String> {
-        self.sender.send(request)
+        self.sender
+            .send(request)
             .map_err(|e| format!("发送绘制请求失败: {}", e))
     }
 
@@ -76,9 +77,7 @@ impl PaintExecutor {
 
             // self.process_request(request).await;
             let self_clone = self.clone();
-            tokio::spawn(async move {
-                self_clone.process_request(request).await
-            });
+            tokio::spawn(async move { self_clone.process_request(request).await });
         }
 
         info!("PaintExecutor 停止");
@@ -86,30 +85,38 @@ impl PaintExecutor {
 
     /// 处理单个绘制请求
     async fn process_request(&self, mut request: PaintRequest) {
-        debug!("处理绘制请求: ({}, {}), token_uid: {}",
-            request.pixel.pos.x, request.pixel.pos.y, request.token_lease.uid());
-        
+        debug!(
+            "处理绘制请求: ({}, {}), token_uid: {}",
+            request.pixel.pos.x,
+            request.pixel.pos.y,
+            request.token_lease.uid()
+        );
+
         let result = {
-            let mut client = &self.client;
+            let client = &self.client;
             let conn = client.get_write_conn().await;
 
             if let Err(e) = conn {
                 error!("无法获取连接，绘制请求取消并等待重试: {:?}", e);
-                return
+                return;
             }
 
             let mut conn = conn.unwrap();
 
             debug!("获取客户端成功，开始绘制");
 
-            let paint_result = conn.paint_with_token(
-                request.pixel.pos,
-                request.pixel.color,
-                request.token_lease.uid(),
-                request.token_lease.token().to_string(),
-            ).await;
-            debug!("绘制操作完成: ({}, {}), 结果: {:?}",
-                request.pixel.pos.x, request.pixel.pos.y, paint_result);
+            let paint_result = conn
+                .paint_with_token(
+                    request.pixel.pos,
+                    request.pixel.color,
+                    request.token_lease.uid(),
+                    request.token_lease.token().to_string(),
+                )
+                .await;
+            debug!(
+                "绘制操作完成: ({}, {}), 结果: {:?}",
+                request.pixel.pos.x, request.pixel.pos.y, paint_result
+            );
 
             paint_result
         };
@@ -128,14 +135,21 @@ impl PaintExecutor {
                                 PixelSource::Own,
                             );
 
-                            info!("成功在 ({}, {}) 使用 Token {} 绘制像素", request.pixel.pos.x, request.pixel.pos.y, request.token_lease.uid());
+                            info!(
+                                "成功在 ({}, {}) 使用 Token {} 绘制像素",
+                                request.pixel.pos.x,
+                                request.pixel.pos.y,
+                                request.token_lease.uid()
+                            );
                         }
 
                         // 标记成功，启动 CD
                         request.token_lease.mark_success();
 
-                        debug!("绘制成功: ({}, {})",
-                            request.pixel.pos.x, request.pixel.pos.y);
+                        debug!(
+                            "绘制成功: ({}, {})",
+                            request.pixel.pos.x, request.pixel.pos.y
+                        );
                     }
                     PaintStatus::Cooldown => {
                         // 不必处理重试，循环比对会忽略
