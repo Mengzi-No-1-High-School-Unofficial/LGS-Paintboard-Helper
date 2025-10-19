@@ -250,14 +250,14 @@ impl BoardSyncManager {
     async fn process_event(local_board: &Arc<RwLock<LocalBoard>>, event: Event) {
         match event {
             Event::OwnPaintEvent { pos, color } => {
-                // debug!("处理自己的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
+                // debug!("😊 处理自己的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
                 {
                     let mut board = local_board.write().await;
                     board.update_pixel(pos.x, pos.y, color, PixelSource::Own);
                 }
             }
             Event::OtherPaintEvent { pos, color } => {
-                // debug!("处理他人的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
+                // debug!("👀 处理他人的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
                 {
                     let mut board = local_board.write().await;
                     board.update_pixel(pos.x, pos.y, color, PixelSource::Other);
