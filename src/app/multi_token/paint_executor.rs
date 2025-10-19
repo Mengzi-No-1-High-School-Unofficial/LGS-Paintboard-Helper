@@ -103,6 +103,9 @@ impl PaintExecutor {
 
             let mut conn = conn.unwrap();
 
+            // 请求发送后就可以视为 Token 已被使用（不管服务端是否接受其，我们都将其视作进入一次 CD）
+            request.token_lease.mark_success();
+
             debug!("获取客户端成功，开始绘制");
 
             let paint_result = conn
