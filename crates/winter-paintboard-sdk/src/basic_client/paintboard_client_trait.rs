@@ -91,9 +91,17 @@ pub trait PaintboardClientTrait {
     ///
     /// # 返回
     /// `Result`，成功时包含 `PaintResult`，失败时包含 `PaintboardError`。
-    async fn paint_with_auth(&mut self, pos: Pos, color: Rgb, uid: u32, token: &str) -> Result<PaintResult, PaintboardError> {
+    async fn paint_with_auth(
+        &mut self,
+        pos: Pos,
+        color: Rgb,
+        uid: u32,
+        token: &str,
+    ) -> Result<PaintResult, PaintboardError> {
         // 默认实现：如果实现者没有提供此方法，则返回错误
-        Err(PaintboardError::auth("paint_with_auth not implemented".to_string()))
+        Err(PaintboardError::auth(
+            "paint_with_auth not implemented".to_string(),
+        ))
     }
 
     /// 使用提供的认证信息批量绘制像素 (新方法)
@@ -105,8 +113,15 @@ pub trait PaintboardClientTrait {
     ///
     /// # 返回
     /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
-    async fn paint_batch_with_auth(&mut self, operations: Vec<(Pos, Rgb)>, uid: u32, token: &str) -> Result<(), PaintboardError> {
+    async fn paint_batch_with_auth(
+        &mut self,
+        operations: Vec<(Pos, Rgb)>,
+        uid: u32,
+        token: &str,
+    ) -> Result<(), PaintboardError> {
         // 默认实现：如果实现者没有提供此方法，则返回错误
-        Err(PaintboardError::auth("paint_batch_with_auth not implemented".to_string()))
+        Err(PaintboardError::auth(
+            "paint_batch_with_auth not implemented".to_string(),
+        ))
     }
 }

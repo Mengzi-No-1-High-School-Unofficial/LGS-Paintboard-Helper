@@ -1,13 +1,13 @@
 use crate::{config::Config, error::PaintboardError, event::EventBus};
+use futures::SinkExt;
 use std::sync::Arc;
-use tokio::sync::Mutex as TokioMutex;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::MaybeTlsStream;
 use tokio::net::TcpStream;
-use url::Url;
+use tokio::sync::Mutex as TokioMutex;
+use tokio_tungstenite::MaybeTlsStream;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{debug, error};
-use futures::SinkExt; // bring SinkExt into scope so WebSocketStream::send is available
+use url::Url; // bring SinkExt into scope so WebSocketStream::send is available
 
 /// WsConnection 封装底层 WebSocket 连接的生命周期与发送接口。
 /// 该类型是轻量的，可由 WsProvider 或其他上层协调者持有 Arc 引用。
@@ -93,7 +93,7 @@ impl WsConnection {
         debug!("尝试获取连接锁进行发送，数据大小: {} 字节", data.len());
         let mut guard = self.stream.lock().await;
         debug!("获取连接锁成功");
-        
+
         let ws_stream = guard.as_mut().ok_or_else(|| {
             error!("发送失败: 连接已关闭 (stream is None)");
             PaintboardError::ConnectionClosed
@@ -106,15 +106,19 @@ impl WsConnection {
                 Ok(())
             }
             Err(e) => {
-                error!("发送二进制消息失败: {} (错误类型: {:?})", e, std::any::type_name_of_val(&e));
-                
+                error!(
+                    "发送二进制消息失败: {} (错误类型: {:?})",
+                    e,
+                    std::any::type_name_of_val(&e)
+                );
+
                 // 检查是否是连接关闭错误
                 let error_str = e.to_string();
                 if error_str.contains("EOF") || error_str.contains("closed") {
                     error!("检测到连接已关闭，清理连接状态");
                     drop(guard.take()); // 清理无效连接
                 }
-                
+
                 let event_bus = EventBus::global();
                 let _ = event_bus.send(crate::event::Event::error_event(format!(
                     "Failed to send binary message: {}",

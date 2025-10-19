@@ -23,8 +23,8 @@ use crate::{
     error::PaintboardError,
     models::{Board, Pos, Rgb},
 };
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -166,7 +166,9 @@ impl BasicClient {
         pos: Pos,
         color: Rgb,
     ) -> Result<crate::models::PaintResult, PaintboardError> {
-        Err(PaintboardError::auth("Authentication required. Use paint_with_auth_impl instead.".to_string()))
+        Err(PaintboardError::auth(
+            "Authentication required. Use paint_with_auth_impl instead.".to_string(),
+        ))
     }
 
     /// 使用批量操作一次性绘制多个像素 (粘性数据包，不等待响应)。
@@ -191,7 +193,9 @@ impl BasicClient {
 
         // Get a mutable reference to the WebSocket client and call paint_batch_with_auth
         let result = if let Some(ref mut ws_client) = self.ws_client {
-            ws_client.paint_batch_with_auth(operations, uid, token).await
+            ws_client
+                .paint_batch_with_auth(operations, uid, token)
+                .await
         } else {
             // This should not happen, but added for safety
             Err(PaintboardError::ClientNotInitialized)
@@ -205,7 +209,9 @@ impl BasicClient {
         &mut self,
         operations: Vec<(Pos, Rgb)>,
     ) -> Result<(), PaintboardError> {
-        Err(PaintboardError::auth("Authentication required. Use paint_batch_with_auth_impl instead.".to_string()))
+        Err(PaintboardError::auth(
+            "Authentication required. Use paint_batch_with_auth_impl instead.".to_string(),
+        ))
     }
 
     /// 初始化 WebSocket 提供者（如果尚未初始化）
@@ -303,8 +309,14 @@ impl PaintboardClientTrait for BasicClient {
     ///
     /// # 返回
     /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
-    async fn paint_batch_with_auth(&mut self, operations: Vec<(Pos, Rgb)>, uid: u32, token: &str) -> Result<(), PaintboardError> {
-        self.paint_batch_with_auth_impl(operations, uid, token).await
+    async fn paint_batch_with_auth(
+        &mut self,
+        operations: Vec<(Pos, Rgb)>,
+        uid: u32,
+        token: &str,
+    ) -> Result<(), PaintboardError> {
+        self.paint_batch_with_auth_impl(operations, uid, token)
+            .await
     }
 
     /// 使用批量操作一次性绘制多个像素 (粘性数据包，不等待响应) (deprecated - use paint_batch_with_auth)

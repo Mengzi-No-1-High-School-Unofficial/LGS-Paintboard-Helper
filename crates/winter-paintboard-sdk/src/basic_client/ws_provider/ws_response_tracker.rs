@@ -1,8 +1,8 @@
+use crate::models::{PaintResult, PaintStatus};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex as TokioMutex};
 use tokio::time::{Duration, Instant};
-use crate::models::{PaintResult, PaintStatus};
 
 /// 响应追踪器：管理 paint 请求对应的 oneshot 发送端
 pub struct WsResponseTracker {
@@ -62,21 +62,21 @@ impl WsResponseTracker {
         let guard = self.channels.lock().await;
         guard.len()
     }
-    
+
     /// 清理超时的请求（超过指定持续时间未响应的请求）
     pub async fn cleanup_expired_requests(&self, timeout_duration: Duration) -> usize {
         let mut guard = self.channels.lock().await;
         let mut removed_count = 0;
-        
+
         let mut expired_keys = Vec::new();
-        
+
         // 首先找出所有过期的请求
         for (paint_id, (_, timestamp)) in guard.iter() {
             if timestamp.elapsed() > timeout_duration {
                 expired_keys.push(*paint_id);
             }
         }
-        
+
         // 然后移除过期的请求并发送超时结果
         for paint_id in expired_keys {
             if let Some((tx, _)) = guard.remove(&paint_id) {
@@ -89,7 +89,7 @@ impl WsResponseTracker {
                 removed_count += 1;
             }
         }
-        
+
         removed_count
     }
 }

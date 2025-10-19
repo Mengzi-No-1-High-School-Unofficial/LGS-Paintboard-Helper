@@ -13,18 +13,16 @@ pub mod error;
 pub mod event;
 /// 数据模型模块，定义了API请求和响应的数据结构。
 pub mod models;
-/// 实用工具模块，提供辅助函数和数据结构。
-pub mod utils;
 /// 连接池工具
 pub mod pool_client;
+/// 实用工具模块，提供辅助函数和数据结构。
+pub mod utils;
 
 /// 从客户端模块导出主要客户端类型和工厂函数。
-pub use basic_client::{
-    create_client_by_type, BasicClient, ClientType, PaintboardClientTrait,
-};
-/// 从连接池模块导出连接池客户端。
-pub use pool_client::PoolClient;
+pub use basic_client::{create_client_by_type, BasicClient, ClientType, PaintboardClientTrait};
 /// 导出SDK的统一错误类型。
 pub use error::PaintboardError;
 /// 从数据模型模块导出常用的数据结构。
 pub use models::{Board, PaintResult, Pos, Rgb};
+/// 从连接池模块导出连接池客户端。
+pub use pool_client::PoolClient;

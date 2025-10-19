@@ -1,28 +1,28 @@
+mod ws_connection;
 mod ws_message_handler;
 mod ws_rate_limiter;
-mod ws_connection;
 mod ws_reconnect;
 mod ws_response_tracker;
 
+use crate::basic_client::ws_provider::ws_connection::WsConnection;
+use crate::basic_client::ws_provider::ws_message_handler::WsMessageHandler;
+use crate::basic_client::ws_provider::ws_rate_limiter::WsRateLimiter;
+use crate::basic_client::ws_provider::ws_reconnect::WsReconnectStrategy;
+use crate::basic_client::ws_provider::ws_response_tracker::WsResponseTracker;
 use crate::{
     config::{Config, ConnectionMode},
     error::PaintboardError,
     event::{Event, EventBus},
     models::{OpCode, PaintOperation, PaintResult, PaintStatus, Pos, ProtocolMessage, Rgb},
 };
+use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
-use tokio::sync::{Mutex as TokioMutex, oneshot, Notify};
+use tokio::sync::{oneshot, Mutex as TokioMutex, Notify};
+use tokio::task::JoinHandle;
+use tokio::time::{interval, timeout, Duration};
+use tokio_tungstenite::tungstenite::protocol::Message;
 use tracing::{debug, error, info, trace, warn};
 use url::Url;
-use futures::{SinkExt, StreamExt};
-use crate::basic_client::ws_provider::ws_connection::WsConnection;
-use crate::basic_client::ws_provider::ws_response_tracker::WsResponseTracker;
-use crate::basic_client::ws_provider::ws_message_handler::WsMessageHandler;
-use crate::basic_client::ws_provider::ws_reconnect::WsReconnectStrategy;
-use crate::basic_client::ws_provider::ws_rate_limiter::WsRateLimiter;
-use tokio_tungstenite::tungstenite::protocol::Message;
-use tokio::time::{timeout, Duration, interval};
-use tokio::task::JoinHandle;
 
 /// 最大包大小 (32 KB)
 const MAX_PACKET_SIZE: usize = 32 * 1024; // 32 KB
@@ -56,7 +56,9 @@ impl WsProvider {
             let mut interval = interval(Duration::from_secs(60)); // 每60秒清理一次
             loop {
                 interval.tick().await;
-                let removed_count = cleanup_tracker.cleanup_expired_requests(Duration::from_secs(60)).await;
+                let removed_count = cleanup_tracker
+                    .cleanup_expired_requests(Duration::from_secs(60))
+                    .await;
                 if removed_count > 0 {
                     debug!("响应追踪器清理任务：移除了 {} 个过期请求", removed_count);
                 }
@@ -89,7 +91,7 @@ impl WsProvider {
         self.connection.connect().await?;
         // Cancel previous task and start a new one
         self.start_message_processing_task().await;
-        
+
         // 等待后台消息处理任务真正启动
         debug!("等待后台消息处理任务启动...");
         let ready_notify = self.message_task_ready.clone();
@@ -97,7 +99,7 @@ impl WsProvider {
             .await
             .map_err(|_| PaintboardError::timeout())?;
         debug!("后台消息处理任务已启动");
-        
+
         Ok(())
     }
 
@@ -119,11 +121,11 @@ impl WsProvider {
 
         self.message_task_handle = Some(tokio::spawn(async move {
             debug!("消息处理任务开始运行");
-            
+
             // 发送启动完成信号
             ready_notify.notify_one();
             debug!("消息处理任务启动信号已发送");
-            
+
             loop {
                 // Inner loop: read messages while connected
                 loop {
@@ -140,9 +142,13 @@ impl WsProvider {
                             }
                             Some(Err(e)) => {
                                 drop(guard);
-                                error!("WebSocket 错误: {} (错误类型: {:?})", e, std::any::type_name_of_val(&e));
+                                error!(
+                                    "WebSocket 错误: {} (错误类型: {:?})",
+                                    e,
+                                    std::any::type_name_of_val(&e)
+                                );
                                 warn!("消息处理任务检测到错误，将清理连接并尝试重连");
-                                
+
                                 // 清理可能的僵尸连接
                                 let mut cleanup_guard = stream_arc.lock().await;
                                 if cleanup_guard.is_some() {
@@ -150,17 +156,15 @@ impl WsProvider {
                                     *cleanup_guard = None;
                                 }
                                 drop(cleanup_guard);
-                                
-                                let _ = EventBus::global().send(Event::error_event(format!(
-                                    "WebSocket error: {}",
-                                    e
-                                )));
+
+                                let _ = EventBus::global()
+                                    .send(Event::error_event(format!("WebSocket error: {}", e)));
                                 break; // break inner loop to attempt reconnection
                             }
                             None => {
                                 drop(guard);
                                 warn!("WebSocket 连接关闭 (收到 None)，清理连接状态");
-                                
+
                                 // 清理连接
                                 let mut cleanup_guard = stream_arc.lock().await;
                                 if cleanup_guard.is_some() {
@@ -168,7 +172,7 @@ impl WsProvider {
                                     *cleanup_guard = None;
                                 }
                                 drop(cleanup_guard);
-                                
+
                                 let _ = EventBus::global().send(Event::ConnectionClosed);
                                 break; // break inner loop to attempt reconnection
                             }
@@ -238,7 +242,10 @@ impl WsProvider {
 
         // Ensure connected
         let is_connected = self.connection.is_connected().await;
-        debug!("paint_with_auth() - 连接状态检查结果: {} (paint_id: {})", is_connected, paint_id);
+        debug!(
+            "paint_with_auth() - 连接状态检查结果: {} (paint_id: {})",
+            is_connected, paint_id
+        );
         if !is_connected {
             debug!("连接不存在，建立新连接 (paint_id: {})", paint_id);
             self.connection.connect().await?;
@@ -260,14 +267,12 @@ impl WsProvider {
 
         // 单次绘图大小检查（理论上不会超过，但为完整性添加）
         if binary_data.len() > MAX_PACKET_SIZE {
-            return Err(PaintboardError::invalid_data(
-                format!(
-                    "绘图消息大小 {} 字节超过限制 {} 字节 ({}KB)",
-                    binary_data.len(),
-                    MAX_PACKET_SIZE,
-                    MAX_PACKET_SIZE / 1024
-                )
-            ));
+            return Err(PaintboardError::invalid_data(format!(
+                "绘图消息大小 {} 字节超过限制 {} 字节 ({}KB)",
+                binary_data.len(),
+                MAX_PACKET_SIZE,
+                MAX_PACKET_SIZE / 1024
+            )));
         }
 
         trace!(
@@ -282,10 +287,13 @@ impl WsProvider {
 
         // Send binary
         debug!("准备发送绘图消息，paint_id: {}", paint_id);
-        self.connection.send_binary(binary_data).await.map_err(|e| {
-            error!("发送绘图消息失败 (paint_id: {}): {:?}", paint_id, e);
-            e
-        })?;
+        self.connection
+            .send_binary(binary_data)
+            .await
+            .map_err(|e| {
+                error!("发送绘图消息失败 (paint_id: {}): {:?}", paint_id, e);
+                e
+            })?;
         debug!("绘图消息已发送，等待响应 (paint_id: {})", paint_id);
 
         // Wait for response with timeout
@@ -302,11 +310,11 @@ impl WsProvider {
                 warn!("等待响应超时 (paint_id: {}，超时: 10s)，清理通道", paint_id);
                 let removed = self.response_tracker.remove_request(paint_id).await;
                 debug!("清理响应通道结果: {}", removed);
-                
+
                 // 检查连接状态
                 let still_connected = self.connection.is_connected().await;
                 warn!("超时后连接状态: {}", still_connected);
-                
+
                 Err(PaintboardError::timeout())
             }
         }
@@ -315,7 +323,9 @@ impl WsProvider {
     /// Paint a pixel at the given position with the specified color (deprecated - use paint_with_auth)
     #[deprecated(note = "Use paint_with_auth instead")]
     pub async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError> {
-        Err(PaintboardError::auth("Authentication required. Use paint_with_auth instead.".to_string()))
+        Err(PaintboardError::auth(
+            "Authentication required. Use paint_with_auth instead.".to_string(),
+        ))
     }
 
     /// Send multiple paint operations together using sticky packet mechanism, without waiting for responses
@@ -334,16 +344,13 @@ impl WsProvider {
 
         // Rate limiting: treat batch as single packet
         if !self.rate_limiter.check() {
-            debug!(
-                "速率限制：paint_batch 请求被丢弃，操作数量: {}",
-                ops_count
-            );
+            debug!("速率限制：paint_batch 请求被丢弃，操作数量: {}", ops_count);
             return Ok(());
         }
 
         let mut all_binary = Vec::new();
         let mut paint_ids = Vec::new(); // 存储paint_id用于清理
-        
+
         for (pos, color) in &operations {
             let paint_id = rand::random::<u64>();
             let op = PaintOperation {
@@ -363,14 +370,12 @@ impl WsProvider {
             for paint_id in paint_ids {
                 let _ = self.response_tracker.remove_request(paint_id).await;
             }
-            return Err(PaintboardError::invalid_data(
-                format!(
-                    "批量包大小 {} 字节超过限制 {} 字节 ({}KB)",
-                    all_binary.len(),
-                    MAX_PACKET_SIZE,
-                    MAX_PACKET_SIZE / 1024
-                )
-            ));
+            return Err(PaintboardError::invalid_data(format!(
+                "批量包大小 {} 字节超过限制 {} 字节 ({}KB)",
+                all_binary.len(),
+                MAX_PACKET_SIZE,
+                MAX_PACKET_SIZE / 1024
+            )));
         }
 
         if !self.connection.is_connected().await {
@@ -410,7 +415,9 @@ impl WsProvider {
         &mut self,
         operations: Vec<(Pos, Rgb)>,
     ) -> Result<(), PaintboardError> {
-        Err(PaintboardError::auth("Authentication required. Use paint_batch_with_auth instead.".to_string()))
+        Err(PaintboardError::auth(
+            "Authentication required. Use paint_batch_with_auth instead.".to_string(),
+        ))
     }
 
     /// Send a heartbeat (PONG) response
@@ -441,11 +448,9 @@ impl WsProvider {
                     "Received unexpected text message",
                 )),
                 Message::Close(_) => Err(PaintboardError::ConnectionClosed),
-                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
-                    Err(PaintboardError::invalid_data(
-                        "Received unexpected WebSocket frame type",
-                    ))
-                }
+                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => Err(
+                    PaintboardError::invalid_data("Received unexpected WebSocket frame type"),
+                ),
                 _ => Err(PaintboardError::invalid_data("Unexpected message type")),
             }
         } else {
@@ -473,7 +478,7 @@ impl WsProvider {
         self.connection.close().await?;
         Ok(())
     }
-    
+
     /// 使用临时 Token 绘制像素（现在直接使用认证参数）
     pub async fn paint_with_token(
         &mut self,

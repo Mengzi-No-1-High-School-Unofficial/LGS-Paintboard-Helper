@@ -1,6 +1,6 @@
-use std::time::{Duration, Instant};
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Token 状态枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub struct TokenLease {
     token: String,
     manager: Arc<Mutex<Vec<TokenData>>>,
     cd_duration: Duration,
-    consumed: bool,  // 防止重复消费
+    consumed: bool, // 防止重复消费
 }
 
 impl TokenLease {

@@ -1,20 +1,20 @@
-use std::sync::Arc;
+use log::{debug, error, info, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::interval;
-use log::{debug, error, info, warn};
 
-use winter_paintboard_sdk::PoolClient;
-use winter_paintboard_sdk::{PaintboardClientTrait, BasicClient, config::Config};
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
 use crate::app::incremental::pixel_comparison::calculate_color_difference;
-use crate::app::multi_token::config::{TokenConfig, PriorityPixel};
-use crate::app::multi_token::pixel_queue::PixelQueue;
-use crate::app::multi_token::token_manager::{TokenManager, TokenInfo};
-use crate::app::multi_token::token_worker::TokenWorker;
+use crate::app::multi_token::config::{PriorityPixel, TokenConfig};
 use crate::app::multi_token::paint_executor::{PaintExecutor, PaintRequestQueue};
+use crate::app::multi_token::pixel_queue::PixelQueue;
+use crate::app::multi_token::token_manager::{TokenInfo, TokenManager};
+use crate::app::multi_token::token_worker::TokenWorker;
+use winter_paintboard_sdk::PoolClient;
+use winter_paintboard_sdk::{config::Config, BasicClient, PaintboardClientTrait};
 
 /// 多 Token 绘制服务
 pub struct MultiTokenService {
@@ -55,9 +55,11 @@ impl MultiTokenService {
                 // 我们暂时使用占位符，实际实现需要调用 get_token
                 return Err("暂时不支持从 access_key 获取 token，请使用预获取的 token".into());
             } else {
-                return Err(format!("Token entry for UID {} 缺少 token 或 access_key", entry.uid).into());
+                return Err(
+                    format!("Token entry for UID {} 缺少 token 或 access_key", entry.uid).into(),
+                );
             };
-            
+
             tokens.push(TokenInfo::new(entry.uid, token));
         }
 
@@ -90,7 +92,10 @@ impl MultiTokenService {
 
     /// 启动服务
     pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        info!("启动多 Token 绘制服务，Token 数量: {}", self.token_manager.len());
+        info!(
+            "启动多 Token 绘制服务，Token 数量: {}",
+            self.token_manager.len()
+        );
 
         // 创建 PaintRequestQueue
         let paint_request_queue = Arc::new(PaintRequestQueue::new());
@@ -145,7 +150,8 @@ impl MultiTokenService {
                 start_y,
                 interval_duration,
                 stop_signal,
-            ).await;
+            )
+            .await;
         });
 
         self.comparison_handle = Some(comparison_handle);
@@ -157,10 +163,10 @@ impl MultiTokenService {
     /// 停止服务
     pub async fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         info!("正在停止多 Token 服务...");
-        
+
         // 设置停止信号
         self.stop_signal.store(true, Ordering::Release);
-        
+
         // 等待所有 Worker 完成
         for handle in self.workers.drain(..) {
             if let Err(e) = handle.await {
@@ -219,7 +225,8 @@ impl MultiTokenService {
                 let relative_x = x - start_x;
                 let relative_y = y - start_y;
 
-                if relative_x >= 0 && relative_y >= 0
+                if relative_x >= 0
+                    && relative_y >= 0
                     && relative_x < target_image.img_width as i32
                     && relative_y < target_image.img_height as i32
                 {

@@ -1,4 +1,8 @@
-use governor::{clock::DefaultClock, state::{InMemoryState, NotKeyed}, Quota, RateLimiter};
+use governor::{
+    clock::DefaultClock,
+    state::{InMemoryState, NotKeyed},
+    Quota, RateLimiter,
+};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 

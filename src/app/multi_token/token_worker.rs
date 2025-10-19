@@ -1,15 +1,18 @@
-use std::sync::Arc;
+use log::{debug, error, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-use log::{debug, error, warn};
 
-use winter_paintboard_sdk::{PaintboardClientTrait, Pos, Rgb, models::{PaintResult, PaintStatus}};
 use crate::app::board_sync::local_board::{LocalBoard, PixelSource};
 use crate::app::multi_token::config::PriorityPixel;
 use crate::app::multi_token::pixel_queue::PixelQueue;
 use crate::app::multi_token::token_manager::TokenManager;
+use winter_paintboard_sdk::{
+    models::{PaintResult, PaintStatus},
+    PaintboardClientTrait, Pos, Rgb,
+};
 
 /// Token 工作器
 pub struct TokenWorker {
@@ -36,7 +39,10 @@ impl TokenWorker {
     }
 
     /// 启动 Worker 主循环
-    pub async fn run(&self, stop_signal: Arc<AtomicBool>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(
+        &self,
+        stop_signal: Arc<AtomicBool>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         debug!("TokenWorker {} 启动", self.worker_id);
 
         loop {
@@ -72,7 +78,8 @@ impl TokenWorker {
             };
 
             // 3. 组装并发送绘制请求
-            let request = crate::app::multi_token::paint_request::PaintRequest::new(pixel, token_lease);
+            let request =
+                crate::app::multi_token::paint_request::PaintRequest::new(pixel, token_lease);
             if let Err(e) = self.request_queue.send(request) {
                 error!("Worker {}: 发送请求失败: {}", self.worker_id, e);
             }

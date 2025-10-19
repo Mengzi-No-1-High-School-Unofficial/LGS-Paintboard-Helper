@@ -56,8 +56,10 @@ impl PixelQueue {
         let mut queue = self.queue.lock().await;
 
         // 创建现有像素的 HashMap（避免在重建期间的竞态条件）
-        let mut pixel_map: std::collections::HashMap<winter_paintboard_sdk::models::Pos, PriorityPixel> =
-            queue.iter().cloned().map(|p| (p.pos, p)).collect();
+        let mut pixel_map: std::collections::HashMap<
+            winter_paintboard_sdk::models::Pos,
+            PriorityPixel,
+        > = queue.iter().cloned().map(|p| (p.pos, p)).collect();
 
         // 合并新像素（新优先级覆盖旧优先级）
         for pixel in new_pixels {
