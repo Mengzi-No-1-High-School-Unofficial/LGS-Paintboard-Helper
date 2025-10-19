@@ -4,14 +4,14 @@ use crate::app::incremental::pixel_comparison::calculate_color_difference;
 use crate::app::incremental::restoration_manager::restore_sorted_pixels;
 use log::{debug, error, info, warn};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::{interval, Duration};
 use winter_paintboard_sdk::{PaintboardClientTrait, Pos, Rgb};
 
 /// 增量修改管理器（从原 `incremental.rs` 迁移）
 pub struct IncrementalManager {
     pub client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
-    pub local_board: Arc<Mutex<LocalBoard>>,
+    pub local_board: Arc<RwLock<LocalBoard>>,
     pub target_image_data: ProcessedImageData,
     pub start_x: i32,
     pub start_y: i32,
@@ -24,7 +24,7 @@ impl IncrementalManager {
     /// 使用已共享的 Arc<Mutex> 客户端创建增量管理器
     pub fn new(
         client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
-        local_board: Arc<Mutex<LocalBoard>>,
+        local_board: Arc<RwLock<LocalBoard>>,
         target_image_data: ProcessedImageData,
         start_x: i32,
         start_y: i32,
@@ -65,7 +65,7 @@ impl IncrementalManager {
     /// 启动监控循环（内部使用）
     pub async fn start_monitoring(
         client: Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
-        local_board: Arc<Mutex<LocalBoard>>,
+        local_board: Arc<RwLock<LocalBoard>>,
         target_image_data: ProcessedImageData,
         start_x: i32,
         start_y: i32,
@@ -94,9 +94,9 @@ impl IncrementalManager {
                     max_batch_size,
                 )
                 .await
-                {
-                    error!("监控和恢复过程中发生错误: {:?}", e);
-                }
+                    {
+                        error!("监控和恢复过程中发生错误: {:?}", e);
+                    }
             }
         });
 
@@ -106,7 +106,7 @@ impl IncrementalManager {
     /// 比较本地绘版与目标图片，并恢复被修改的像素
     async fn compare_and_restore(
         client: &Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>,
-        local_board: &Arc<Mutex<LocalBoard>>,
+        local_board: &Arc<RwLock<LocalBoard>>,
         target_image_data: &ProcessedImageData,
         start_x: i32,
         start_y: i32,
@@ -117,7 +117,7 @@ impl IncrementalManager {
 
         // 获取本地绘版数据的副本
         let local_pixels = {
-            let board = local_board.lock().await;
+            let board = local_board.read().await;
             if !board.is_initialized() {
                 warn!("本地绘版数据未初始化，跳过本次比对");
                 return Ok(());

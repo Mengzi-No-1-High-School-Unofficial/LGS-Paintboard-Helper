@@ -43,7 +43,7 @@ impl PaintRequestQueue {
 pub struct PaintExecutor {
     client: Arc<PoolClient>,
     request_queue: Arc<PaintRequestQueue>,
-    local_board: Arc<Mutex<LocalBoard>>,
+    local_board: Arc<RwLock<LocalBoard>>,
     pixel_queue: Arc<crate::app::multi_token::pixel_queue::PixelQueue>,
 }
 
@@ -51,7 +51,7 @@ impl PaintExecutor {
     pub fn new(
         client: Arc<PoolClient>,
         request_queue: Arc<PaintRequestQueue>,
-        local_board: Arc<Mutex<LocalBoard>>,
+        local_board: Arc<RwLock<LocalBoard>>,
         pixel_queue: Arc<crate::app::multi_token::pixel_queue::PixelQueue>,
     ) -> Self {
         Self {
@@ -127,14 +127,14 @@ impl PaintExecutor {
                     PaintStatus::Success => {
                         // 更新本地绘版
                         {
-                            let mut board = self.local_board.lock().await;
+                            let mut board = self.local_board.write().await;
                             board.update_pixel(
                                 request.pixel.pos.x,
                                 request.pixel.pos.y,
                                 request.pixel.color,
                                 PixelSource::Own,
                             );
-
+    
                             info!(
                                 "成功在 ({}, {}) 使用 Token {} 绘制像素",
                                 request.pixel.pos.x,

@@ -3,14 +3,14 @@ use log::{error, info, warn};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::{interval, Duration};
 
 use crate::app::board_sync::{BoardSyncManager, LocalBoard};
 
 /// 图片导出管理器
 pub struct ExportManager {
-    local_board: Arc<Mutex<LocalBoard>>,
+    local_board: Arc<RwLock<LocalBoard>>,
     export_dir: PathBuf,
     export_interval: Duration,
 }
@@ -18,7 +18,7 @@ pub struct ExportManager {
 impl ExportManager {
     /// 创建新的导出管理器
     pub fn new(
-        local_board: Arc<Mutex<LocalBoard>>,
+        local_board: Arc<RwLock<LocalBoard>>,
         export_dir: PathBuf,
         export_interval: Duration,
     ) -> Self {
@@ -46,7 +46,7 @@ impl ExportManager {
 
         // 获取本地绘版数据并导出为图片
         {
-            let board = self.local_board.lock().await;
+            let board = self.local_board.read().await;
 
             if !board.is_initialized() {
                 warn!("绘版数据尚未初始化，跳过本次导出");

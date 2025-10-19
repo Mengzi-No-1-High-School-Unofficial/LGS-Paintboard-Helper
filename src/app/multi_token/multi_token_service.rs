@@ -23,7 +23,7 @@ pub struct MultiTokenService {
     comparison_handle: Option<tokio::task::JoinHandle<()>>,
     metrics_handle: Option<tokio::task::JoinHandle<()>>,
     pixel_queue: Arc<PixelQueue>,
-    local_board: Arc<Mutex<LocalBoard>>,
+    local_board: Arc<RwLock<LocalBoard>>,
     target_image: ProcessedImageData,
     start_x: i32,
     start_y: i32,
@@ -38,7 +38,7 @@ impl MultiTokenService {
     pub async fn new(
         token_config: TokenConfig,
         ws_url: Option<String>,
-        local_board: Arc<Mutex<LocalBoard>>,
+        local_board: Arc<RwLock<LocalBoard>>,
         target_image: ProcessedImageData,
         start_x: i32,
         start_y: i32,
@@ -188,7 +188,7 @@ impl MultiTokenService {
     /// 运行比对循环
     async fn run_comparison_loop(
         pixel_queue: Arc<PixelQueue>,
-        local_board: Arc<Mutex<LocalBoard>>,
+        local_board: Arc<RwLock<LocalBoard>>,
         target_image: ProcessedImageData,
         start_x: i32,
         start_y: i32,
@@ -208,7 +208,7 @@ impl MultiTokenService {
 
             // 获取本地绘版数据
             let local_pixels = {
-                let board = local_board.lock().await;
+                let board = local_board.read().await;
                 if !board.is_initialized() {
                     warn!("本地绘版未初始化，跳过比对");
                     continue;

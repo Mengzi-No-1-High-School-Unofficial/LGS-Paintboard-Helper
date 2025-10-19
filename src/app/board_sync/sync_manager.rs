@@ -1,6 +1,6 @@
 use log::{debug, error, info, warn};
 use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio::time::{interval, Duration};
 use winter_paintboard_sdk::event::Event;
 use winter_paintboard_sdk::PaintboardClientTrait;
@@ -10,10 +10,10 @@ use super::local_board::{LocalBoard, PixelSource, SyncStatus};
 /// 绘版同步管理器
 #[derive(Clone)]
 pub struct BoardSyncManager {
-    local_board: Arc<Mutex<LocalBoard>>,
+    local_board: Arc<RwLock<LocalBoard>>,
     event_bus: Arc<winter_paintboard_sdk::event::EventBus>, // 使用EventBus而不是Receiver
-    should_stop: Arc<Mutex<bool>>,
-    sync_in_progress: Arc<Mutex<bool>>, // 用于在同步期间暂停事件处理的标志
+    should_stop: Arc<RwLock<bool>>,
+    sync_in_progress: Arc<RwLock<bool>>, // 用于在同步期间暂停事件处理的标志
     pending_events: Arc<Mutex<Vec<Event>>>, // 缓存同步期间收到的事件
 }
 
@@ -21,16 +21,16 @@ impl BoardSyncManager {
     /// 创建新的同步管理器
     pub fn new(event_bus: &winter_paintboard_sdk::event::EventBus) -> Self {
         Self {
-            local_board: Arc::new(Mutex::new(LocalBoard::new(1000, 600))),
+            local_board: Arc::new(RwLock::new(LocalBoard::new(1000, 600))),
             event_bus: Arc::new(event_bus.clone()),
-            should_stop: Arc::new(Mutex::new(false)),
-            sync_in_progress: Arc::new(Mutex::new(false)),
+            should_stop: Arc::new(RwLock::new(false)),
+            sync_in_progress: Arc::new(RwLock::new(false)),
             pending_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     /// 获取本地绘版数据的Arc引用
-    pub fn local_board(&self) -> Arc<Mutex<LocalBoard>> {
+    pub fn local_board(&self) -> Arc<RwLock<LocalBoard>> {
         self.local_board.clone()
     }
 
@@ -49,7 +49,7 @@ impl BoardSyncManager {
             loop {
                 // 检查是否需要停止
                 {
-                    let stop = sync_manager.should_stop.lock().await;
+                    let stop = sync_manager.should_stop.read().await;
                     if *stop {
                         break;
                     }
@@ -61,7 +61,7 @@ impl BoardSyncManager {
 
                 // 开始同步前，标记同步进行中
                 {
-                    let mut sync_flag = sync_manager.sync_in_progress.lock().await;
+                    let mut sync_flag = sync_manager.sync_in_progress.write().await;
                     *sync_flag = true;
                     info!("开始全量同步绘版数据...");
                 }
@@ -75,7 +75,7 @@ impl BoardSyncManager {
                     match client.get_board().await {
                         Ok(board_data) => {
                             {
-                                let mut board = sync_manager.local_board.lock().await;
+                                let mut board = sync_manager.local_board.write().await;
                                 board.update_from_board(&board_data);
                                 board.set_sync_status(SyncStatus::Idle);
                                 info!(
@@ -93,7 +93,7 @@ impl BoardSyncManager {
                                     max_retries, e
                                 );
                                 {
-                                    let mut board = sync_manager.local_board.lock().await;
+                                    let mut board = sync_manager.local_board.write().await;
                                     board.set_sync_status(SyncStatus::Error(e.to_string()));
                                 }
                             } else {
@@ -107,7 +107,7 @@ impl BoardSyncManager {
 
                 // 同步完成后，标记同步结束
                 {
-                    let mut sync_flag = sync_manager.sync_in_progress.lock().await;
+                    let mut sync_flag = sync_manager.sync_in_progress.write().await;
                     *sync_flag = false;
                 }
 
@@ -137,7 +137,7 @@ impl BoardSyncManager {
             loop {
                 // 检查是否需要停止
                 {
-                    let stop = sync_manager.should_stop.lock().await;
+                    let stop = sync_manager.should_stop.read().await;
                     if *stop {
                         break;
                     }
@@ -149,7 +149,7 @@ impl BoardSyncManager {
 
                 // 开始同步前，标记同步进行中
                 {
-                    let mut sync_flag = sync_manager.sync_in_progress.lock().await;
+                    let mut sync_flag = sync_manager.sync_in_progress.write().await;
                     *sync_flag = true;
                     info!("开始增量同步绘版数据...");
                 }
@@ -157,7 +157,7 @@ impl BoardSyncManager {
                 // 尝试获取服务器数据
                 match client.get_board().await {
                     Ok(board_data) => {
-                        let mut board = sync_manager.local_board.lock().await;
+                        let mut board = sync_manager.local_board.write().await;
 
                         // 执行差异同步（update_from_board 方法会进行实际的差异比较和更新）
                         board.update_from_board(&board_data);
@@ -173,7 +173,7 @@ impl BoardSyncManager {
                     Err(e) => {
                         error!("增量同步失败: {:?}", e);
                         {
-                            let mut board = sync_manager.local_board.lock().await;
+                            let mut board = sync_manager.local_board.write().await;
                             board.set_sync_status(SyncStatus::Error(e.to_string()));
                         }
                     }
@@ -181,7 +181,7 @@ impl BoardSyncManager {
 
                 // 同步完成后，标记同步结束
                 {
-                    let mut sync_flag = sync_manager.sync_in_progress.lock().await;
+                    let mut sync_flag = sync_manager.sync_in_progress.write().await;
                     *sync_flag = false;
                 }
 
@@ -206,7 +206,7 @@ impl BoardSyncManager {
             loop {
                 // 检查是否需要停止
                 {
-                    let stop = should_stop.lock().await;
+                    let stop = should_stop.read().await;
                     if *stop {
                         info!("停止事件监听器");
                         break;
@@ -218,7 +218,7 @@ impl BoardSyncManager {
                     Ok(event) => {
                         // 检查是否正在进行同步
                         {
-                            let sync_flag = sync_in_progress.lock().await;
+                            let sync_flag = sync_in_progress.read().await;
                             if *sync_flag {
                                 // 在同步期间，将事件添加到待处理列表中
                                 let mut pending = pending_events.lock().await;
@@ -247,19 +247,19 @@ impl BoardSyncManager {
     }
 
     /// 处理单个事件
-    async fn process_event(local_board: &Arc<Mutex<LocalBoard>>, event: Event) {
+    async fn process_event(local_board: &Arc<RwLock<LocalBoard>>, event: Event) {
         match event {
             Event::OwnPaintEvent { pos, color } => {
                 // debug!("处理自己的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
                 {
-                    let mut board = local_board.lock().await;
+                    let mut board = local_board.write().await;
                     board.update_pixel(pos.x, pos.y, color, PixelSource::Own);
                 }
             }
             Event::OtherPaintEvent { pos, color } => {
                 // debug!("处理他人的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
                 {
-                    let mut board = local_board.lock().await;
+                    let mut board = local_board.write().await;
                     board.update_pixel(pos.x, pos.y, color, PixelSource::Other);
                 }
             }
@@ -299,7 +299,7 @@ impl BoardSyncManager {
     /// 停止同步管理器
     pub async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
         {
-            let mut should_stop = self.should_stop.lock().await;
+            let mut should_stop = self.should_stop.write().await;
             *should_stop = true;
         }
         info!("同步管理器已停止");
