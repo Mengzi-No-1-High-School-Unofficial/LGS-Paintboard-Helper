@@ -10,7 +10,7 @@ pub mod utils;
 use log::{error, info};
 use std::path::PathBuf;
 use tokio::time::Duration;
-use winter_paintboard_sdk::client::HttpProvider;
+use winter_paintboard_sdk::basic_client::HttpProvider;
 use winter_paintboard_sdk::config::Config;
 
 use crate::app::{
