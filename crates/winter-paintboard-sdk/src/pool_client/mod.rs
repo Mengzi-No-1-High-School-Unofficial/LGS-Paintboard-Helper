@@ -3,9 +3,11 @@
 
 mod manager;
 mod pool;
+mod delay_client;
 
-pub use manager::WriteOnlyManager;
-pub use pool::WriteOnlyPool;
+pub use manager::DelayClientManager;
+pub use pool::DelayPool;
+pub use delay_client::DelayClient;
 
 use crate::{
     basic_client::BasicClient,
@@ -24,7 +26,7 @@ use tokio::sync::Mutex;
 /// - 写操作从 WriteOnly 连接池获取连接
 pub struct PoolClient {
     /// WriteOnly 连接池，用于绘制操作
-    write_pool: WriteOnlyPool,
+    write_pool: DelayPool,
     /// ReadOnly 连接，用于获取画板数据
     read_client: Arc<Mutex<BasicClient>>,
     /// 共享配置
@@ -39,7 +41,7 @@ impl PoolClient {
         let config = Arc::new(config);
 
         // 创建 WriteOnly 连接池
-        let write_pool = WriteOnlyPool::new(config.clone()).await?;
+        let write_pool = DelayPool::new(config.clone()).await?;
 
         // 创建 ReadOnly 连接
         let mut read_config = (*config).clone();
@@ -58,7 +60,7 @@ impl PoolClient {
 
     pub async fn get_write_conn(
         &self,
-    ) -> Result<deadpool::managed::Object<WriteOnlyManager>, PaintboardError> {
+    ) -> Result<deadpool::managed::Object<DelayClientManager>, PaintboardError> {
         self.write_pool.get().await
     }
 }

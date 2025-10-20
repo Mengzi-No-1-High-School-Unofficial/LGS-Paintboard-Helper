@@ -19,7 +19,7 @@ pub mod pool_client;
 pub mod utils;
 
 /// 从客户端模块导出主要客户端类型和工厂函数。
-pub use basic_client::{create_client_by_type, BasicClient, ClientType, PaintboardClientTrait};
+pub use basic_client::{create_client_by_type, BasicClient, ClientType, PaintboardClientTrait, WsProvider, HttpProvider};
 /// 导出SDK的统一错误类型。
 pub use error::PaintboardError;
 /// 从数据模型模块导出常用的数据结构。

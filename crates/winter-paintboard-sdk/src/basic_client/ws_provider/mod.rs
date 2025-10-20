@@ -278,11 +278,12 @@ impl WsProvider {
             }
         }
 
+        let size = merged_packets.len();
         let sending_result = self.connection.send_binary(merged_packets).await;
 
         match sending_result {
             Ok(_) => {
-                debug!("成功发送 Pending Packets，清空 Deque");
+                debug!("成功发送 Pending Packets，共计 {} 个 bytes，清空 Deque", size);
                 self.pending_packets.write().await.clear();
             }
             Err(e) => {
@@ -306,7 +307,7 @@ impl WsProvider {
         uid: u32,
         token: &str,
     ) -> Result<PaintResult, PaintboardError> {
-        let paint_id = rand::random::<u64>();
+        let paint_id = rand::random::<u32>();
         let operation = PaintOperation {
             pos,
             color,
@@ -369,7 +370,7 @@ impl WsProvider {
         }
 
         // Generate unique paint id first (needed for logging)
-        let paint_id = rand::random::<u64>();
+        let paint_id = rand::random::<u32>();
 
         // Ensure connected
         let is_connected = self.connection.is_connected().await;
@@ -483,7 +484,7 @@ impl WsProvider {
         let mut paint_ids = Vec::new(); // 存储paint_id用于清理
 
         for (pos, color) in &operations {
-            let paint_id = rand::random::<u64>();
+            let paint_id = rand::random::<u32>();
             let op = PaintOperation {
                 pos: *pos,
                 color: *color,

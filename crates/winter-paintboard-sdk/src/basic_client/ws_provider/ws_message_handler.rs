@@ -79,23 +79,15 @@ impl WsMessageHandler {
                             // 优先尝试按 drawing_id 匹配请求通道
                             let matched = self
                                 .response_tracker
-                                .complete_request(drawing_id as u64, paint_result.clone())
+                                .complete_request(drawing_id, paint_result.clone())
                                 .await;
+
                             if !matched {
                                 // 回退策略：如果无法直接匹配，就完成第一个挂起的请求（保留现有行为）
                                 debug!(
-                                    "⚠️  未找到匹配的 paint_id ({}), 尝试回退到第一个挂起请求",
+                                    "⚠️  未找到匹配的 paint_id ({}),",
                                     drawing_id
-                                );
-                                let fallback_matched = self
-                                    .response_tracker
-                                    .complete_first_request(paint_result)
-                                    .await;
-                                if fallback_matched {
-                                    debug!("✅ 回退策略成功，已完成第一个挂起请求");
-                                } else {
-                                    warn!("❌ 回退策略失败，没有挂起的请求");
-                                }
+                                )
                             } else {
                                 debug!("✅ 已完成匹配的响应通道 (drawing_id: {})", drawing_id);
                             }

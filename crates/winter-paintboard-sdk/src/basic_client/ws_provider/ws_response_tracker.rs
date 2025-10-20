@@ -1,23 +1,42 @@
 use crate::models::{PaintResult, PaintStatus};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc};
+use once_cell::sync::OnceCell;
 use tokio::sync::{oneshot, Mutex as TokioMutex};
 use tokio::time::{Duration, Instant};
 
+static GLOBAL_WS_RESPONSE_TRACKER: OnceCell<WsResponseTracker> = OnceCell::new();
+
 /// 响应追踪器：管理 paint 请求对应的 oneshot 发送端
+/// 
+/// 全局追踪器为 [`GLOBAL_WS_RESPONSE_TRACKER`]，默认 [`WsResponseTracker::new`] 返回全局追踪器（不存在则创建）
+/// 
+/// 如果需要独立的追踪器，请使用 [`WsResponseTracker::new_local`]
+#[derive(Clone)]
 pub struct WsResponseTracker {
-    channels: Arc<TokioMutex<HashMap<u64, (oneshot::Sender<PaintResult>, Instant)>>>,
+    channels: Arc<TokioMutex<HashMap<u32, (oneshot::Sender<PaintResult>, Instant)>>>,
 }
 
 impl WsResponseTracker {
+    /// 返回全局追踪器，如不存在则使用 [`WsResponseTracker::new_local`] 创建
     pub fn new() -> Self {
+        let tracker = GLOBAL_WS_RESPONSE_TRACKER.get_or_init(|| {
+            WsResponseTracker::new_local()
+        });
+
+        // 成员变量均为 Arc + Mutex，直接 Clone 不会导致引用的丢失
+        tracker.clone()
+    }
+    
+    /// 创建新的追踪器（无论是否存在全局追踪器）
+    pub fn new_local() -> Self {
         Self {
             channels: Arc::new(TokioMutex::new(HashMap::new())),
         }
     }
 
     /// 注册一个请求并返回接收端
-    pub async fn register_request(&self, paint_id: u64) -> oneshot::Receiver<PaintResult> {
+    pub async fn register_request(&self, paint_id: u32) -> oneshot::Receiver<PaintResult> {
         let (tx, rx) = oneshot::channel();
         let mut guard = self.channels.lock().await;
         guard.insert(paint_id, (tx, Instant::now()));
@@ -25,7 +44,7 @@ impl WsResponseTracker {
     }
 
     /// 完成请求：根据 paint_id 发送结果，返回是否找到对应通道
-    pub async fn complete_request(&self, paint_id: u64, result: PaintResult) -> bool {
+    pub async fn complete_request(&self, paint_id: u32, result: PaintResult) -> bool {
         let mut guard = self.channels.lock().await;
         if let Some((tx, _)) = guard.remove(&paint_id) {
             // 如果发送失败（接收端被丢弃），则忽略错误
@@ -36,23 +55,8 @@ impl WsResponseTracker {
         }
     }
 
-    /// 完成第一个挂起的请求（回退策略）
-    /// 有些协议情况下，服务器返回的 drawing_id 无法直接映射到我们发送的 paint_id，
-    /// 这里保留原始实现的回退行为：将结果派发到第一个可用的挂起通道。
-    pub async fn complete_first_request(&self, result: PaintResult) -> bool {
-        let mut guard = self.channels.lock().await;
-        // 取第一个 key
-        if let Some((&first_key, _)) = guard.iter().next() {
-            if let Some((tx, _)) = guard.remove(&first_key) {
-                let _ = tx.send(result);
-                return true;
-            }
-        }
-        false
-    }
-
     /// 移除并返回是否存在（用于超时清理）
-    pub async fn remove_request(&self, paint_id: u64) -> bool {
+    pub async fn remove_request(&self, paint_id: u32) -> bool {
         let mut guard = self.channels.lock().await;
         guard.remove(&paint_id).is_some()
     }
