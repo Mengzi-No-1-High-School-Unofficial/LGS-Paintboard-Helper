@@ -19,7 +19,7 @@ impl WriteOnlyPool {
 
         tracing::debug!("正在构建连接池...");
         let pool = Pool::builder(manager)
-            .max_size(5) // API 限制：最多 5 个 WriteOnly 连接
+            .max_size(4) // API 限制：最多 5 个 WriteOnly 连接，保守 4 个
             .wait_timeout(Some(Duration::from_secs(30))) // 获取连接超时
             .create_timeout(Some(Duration::from_secs(10))) // 创建连接超时
             .recycle_timeout(Some(Duration::from_secs(5))) // 回收连接超时

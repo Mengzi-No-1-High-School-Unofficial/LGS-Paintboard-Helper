@@ -99,7 +99,7 @@ impl PaintboardClientTrait for PoolClient {
         // 获取默认认证信息
         if let Some((uid, token)) = self.default_auth.lock().await.clone() {
             // 使用认证信息绘制
-            conn.paint_with_auth(pos, color, uid, &token).await
+            conn.paint_with_token(pos, color, uid, token.clone()).await
         } else {
             Err(PaintboardError::auth(
                 "Authentication required. Use paint_with_auth or set default auth first."
@@ -135,7 +135,7 @@ impl PaintboardClientTrait for PoolClient {
         let mut conn = self.write_pool.get().await?;
 
         // 使用临时 token 绘制
-        conn.paint_with_auth(pos, color, uid, &token).await
+        conn.paint_with_token(pos, color, uid, token).await
     }
 
     fn get_config(&self) -> &Config {
