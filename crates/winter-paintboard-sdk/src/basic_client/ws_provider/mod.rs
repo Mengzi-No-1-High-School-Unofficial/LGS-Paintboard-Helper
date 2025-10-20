@@ -16,8 +16,9 @@ use crate::{
     models::{OpCode, PaintOperation, PaintResult, PaintStatus, Pos, ProtocolMessage, Rgb},
 };
 use futures::{SinkExt, StreamExt};
+use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::{oneshot, Mutex as TokioMutex, Notify};
+use tokio::sync::{oneshot, Mutex as TokioMutex, Notify, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, timeout, Duration};
 use tokio_tungstenite::tungstenite::protocol::Message;
@@ -26,18 +27,24 @@ use url::Url;
 
 /// 最大包大小 (32 KB)
 const MAX_PACKET_SIZE: usize = 32 * 1024; // 32 KB
+const PENDING_PACKETS_SIZE_LIMIT: usize = 128;
+const PENDING_PACKETS_DURATION_MILLS: u64 = 1000 * 5;
 
 /// Refactored WebSocket provider for Winter Paintboard API
+#[derive(Clone)]
 pub struct WsProvider {
     config: Arc<Config>,
     connection: Arc<WsConnection>,
     response_tracker: Arc<WsResponseTracker>,
     message_handler: Arc<WsMessageHandler>,
-    message_task_handle: Option<JoinHandle<()>>,
+    message_task_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
+    send_pending_packets_by_duration_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
+    send_pending_packets_by_limit_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
     reconnect_strategy: Arc<TokioMutex<WsReconnectStrategy>>,
     rate_limiter: Arc<WsRateLimiter>,
-    cleanup_task_handle: Option<JoinHandle<()>>,
+    cleanup_task_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
     message_task_ready: Arc<Notify>,
+    pending_packets: Arc<RwLock<VecDeque<Vec<u8>>>>,
 }
 
 impl WsProvider {
@@ -70,11 +77,14 @@ impl WsProvider {
             connection,
             response_tracker,
             message_handler,
-            message_task_handle: None,
+            message_task_handle: Arc::new(TokioMutex::new(None)),
             reconnect_strategy,
             rate_limiter,
-            cleanup_task_handle,
+            cleanup_task_handle: Arc::new(TokioMutex::new(None)),
             message_task_ready: Arc::new(Notify::new()),
+            pending_packets: Arc::new(RwLock::new(VecDeque::new())),
+            send_pending_packets_by_duration_handle: Arc::new(TokioMutex::new(None)),
+            send_pending_packets_by_limit_handle: Arc::new(TokioMutex::new(None)),
         })
     }
 
@@ -107,9 +117,12 @@ impl WsProvider {
     async fn start_message_processing_task(&mut self) {
         debug!("开始启动消息处理任务");
         // Cancel previous task
-        if let Some(handle) = self.message_task_handle.take() {
-            handle.abort();
-            debug!("已停止之前的消息处理任务");
+        {
+            let mut guard = self.message_task_handle.lock().await;
+            if let Some(handle) = guard.take() {
+                handle.abort();
+                debug!("已停止之前的消息处理任务");
+            }
         }
 
         let stream_arc = self.connection.stream();
@@ -119,7 +132,7 @@ impl WsProvider {
         let config = self.config.clone();
         let ready_notify = self.message_task_ready.clone();
 
-        self.message_task_handle = Some(tokio::spawn(async move {
+        *self.message_task_handle.lock().await = Some(tokio::spawn(async move {
             debug!("消息处理任务开始运行");
 
             // 发送启动完成信号
@@ -214,6 +227,124 @@ impl WsProvider {
             }
             debug!("消息处理任务结束");
         }));
+
+        if self.config.connection_mode != ConnectionMode::ReadOnly {
+            let mut self_clone = self.clone();
+            
+            *self.send_pending_packets_by_duration_handle.lock().await =
+                Some(tokio::spawn(async move {
+                    let mut interval =
+                        interval(Duration::from_millis(PENDING_PACKETS_DURATION_MILLS));
+
+                    loop {
+                        let _ = self_clone.send_pending_packets().await;
+                        interval.tick().await;
+                    }
+                }));
+
+            let mut self_clone = self.clone();
+            *self.send_pending_packets_by_limit_handle.lock().await =
+                Some(tokio::spawn(async move {
+                    let mut interval = interval(Duration::from_millis(100));
+
+                    loop {
+                        if self_clone.pending_packets.read().await.len()
+                            >= PENDING_PACKETS_SIZE_LIMIT
+                        {
+                            let _ = self_clone.send_pending_packets().await;
+                            debug!("触发 Pending Packets Limit，直接发送")
+                        }
+
+                        interval.tick().await;
+                    }
+                }));
+        }
+    }
+
+    async fn send_pending_packets(&mut self) -> Result<(), PaintboardError> {
+        let mut merged_packets: Vec<u8> = vec![];
+
+        {
+            let pending_packets = self.pending_packets.read().await;
+
+            if pending_packets.len() == 0 {
+                return Ok(());
+            }
+
+            for packet in pending_packets.iter() {
+                for val in packet {
+                    merged_packets.push(*val);
+                }
+            }
+        }
+
+        let sending_result = self.connection.send_binary(merged_packets).await;
+
+        match sending_result {
+            Ok(_) => {
+                debug!("成功发送 Pending Packets，清空 Deque");
+                self.pending_packets.write().await.clear();
+            }
+            Err(e) => {
+                error!("发送 Pending Packets 错误：{:?}", e);
+                return Err(e);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 延迟绘画
+    ///
+    /// 将绘画请求放入 [`self.pending_packets`] 中
+    ///
+    /// 如果队列长度超过 [`PENDING_PACKETS_SIZE_LIMIT`] 或者距离上次发送时间大于 [`PENDING_PACKETS_DURATION_MILLS`] 毫秒，则调用 [`send_pending_packets`] 发送（此操作在后台执行）
+    pub async fn paint_delayed(
+        &mut self,
+        pos: Pos,
+        color: Rgb,
+        uid: u32,
+        token: &str,
+    ) -> Result<PaintResult, PaintboardError> {
+        let paint_id = rand::random::<u64>();
+        let operation = PaintOperation {
+            pos,
+            color,
+            token_uid: uid,
+            token: token.to_string(),
+            paint_id: paint_id as u32,
+        };
+
+        let binary_data = operation.to_binary();
+
+        let response_rx = self.response_tracker.register_request(paint_id).await;
+
+        {
+            let mut pending_packets = self.pending_packets.write().await;
+            pending_packets.push_back(binary_data);
+        }
+
+        match timeout(Duration::from_secs(10), response_rx).await {
+            Ok(Ok(result)) => {
+                debug!("成功接收到绘图结果");
+                Ok(result)
+            }
+            Ok(Err(_)) => {
+                debug!("响应通道关闭");
+                Err(PaintboardError::ResponseChannelClosed)
+            }
+            Err(_) => {
+                warn!("等待响应超时 (paint_id: {}，超时: 10s)，清理通道", paint_id);
+                let removed = self.response_tracker.remove_request(paint_id).await;
+                debug!("清理响应通道结果: {}", removed);
+
+                // 检查连接状态
+                let still_connected = self.connection.is_connected().await;
+                warn!("超时后连接状态: {}", still_connected);
+
+                Err(PaintboardError::timeout())
+            }
+        }
     }
 
     /// Paint a pixel at the given position with the specified color using provided authentication
@@ -466,13 +597,34 @@ impl WsProvider {
             rs.disable_reconnect();
         }
 
-        if let Some(handle) = self.message_task_handle.take() {
-            handle.abort();
+        {
+            let mut guard = self.message_task_handle.lock().await;
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
         }
 
         // 停止清理任务
-        if let Some(handle) = self.cleanup_task_handle.take() {
-            handle.abort();
+        {
+            let mut guard = self.cleanup_task_handle.lock().await;
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
+        }
+
+        // 停止 Pending Packets 相关
+        {
+            let mut guard = self.send_pending_packets_by_duration_handle.lock().await;
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
+        }
+
+        {
+            let mut guard = self.send_pending_packets_by_limit_handle.lock().await;
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
         }
 
         self.connection.close().await?;

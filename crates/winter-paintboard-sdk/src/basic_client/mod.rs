@@ -151,7 +151,9 @@ impl BasicClient {
         self.init_ws_provider_if_none().await?;
 
         let result = if let Some(ref mut ws_client) = self.ws_client {
-            ws_client.paint_with_auth(pos, color, uid, token).await
+            // TODO: 将来允许配置
+            ws_client.paint_delayed(pos, color, uid, token).await
+            // ws_client.paint_with_auth(pos, color, uid, token).await
         } else {
             // This should not happen, but added for safety
             Err(PaintboardError::ClientNotInitialized)
@@ -267,27 +269,6 @@ impl PaintboardClientTrait for BasicClient {
     /// `Result`，成功时包含认证令牌字符串，失败时包含 `PaintboardError`。
     async fn get_token(&self, uid: u32, access_key: &str) -> Result<String, PaintboardError> {
         self.get_token_impl(uid, access_key).await
-    }
-
-    /// 在给定位置绘制一个像素，并指定颜色。
-    /// 使用提供的认证信息。
-    ///
-    /// # 参数
-    /// - `pos`: 像素位置。
-    /// - `color`: 像素颜色。
-    /// - `uid`: 用户ID。
-    /// - `token`: 认证令牌。
-    ///
-    /// # 返回
-    /// `Result`，成功时包含 `PaintResult`，失败时包含 `PaintboardError`。
-    async fn paint_with_auth(
-        &mut self,
-        pos: Pos,
-        color: Rgb,
-        uid: u32,
-        token: &str,
-    ) -> Result<crate::models::PaintResult, PaintboardError> {
-        self.paint_with_auth_impl(pos, color, uid, token).await
     }
 
     /// 在给定位置绘制一个像素，并指定颜色 (deprecated - use paint_with_auth)
