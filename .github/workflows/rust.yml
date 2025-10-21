@@ -11,20 +11,24 @@ env:
 
 jobs:
   build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]  # 定义操作系统
-        build_type: [debug, release]  # 定义构建类型
-
-    runs-on: ${{ matrix.os }}  # 动态选择运行的操作系统
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build ${{ matrix.build_type }} version
-        run: cargo build --${{ matrix.build_type }}  # 根据矩阵选择 debug 或 release 构建
+      - name: Build Debug
+        run: cargo build
+      
+      - name: Build Release
+        run: cargo build --release
 
-      - name: Upload ${{ matrix.build_type }} Artifact
+      - name: Upload a Debug Artifact
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: lgs-paintboard-${{ matrix.os }}-${{ matrix.build_type }}${{ matrix.os == 'windows-latest' && '-exe' || '' }}
-          path: ./target/${{ matrix.build_type }}/lgs-paintboard${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          name: lgs-paintboard-debug
+          path: ./target/debug/lgs-paintboard
+        
+      - name: Upload a Release Artifact
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: lgs-paintboard
+          path: ./target/release/lgs-paintboard
