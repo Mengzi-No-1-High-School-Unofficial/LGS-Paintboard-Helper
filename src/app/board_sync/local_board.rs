@@ -60,59 +60,17 @@ impl LocalBoard {
             let current_time = std::time::SystemTime::now();
             let pos = Pos::new(x, y).expect("Invalid coordinates for Pos creation"); // Pos struct ensures valid coordinates
 
-            // 服务端权威：来自他人的事件（服务端事件）总是优先
-            if source == PixelSource::Other {
-                // 来自他人的事件，即服务端真实状态，总是更新
-                self.pixels.insert(
-                    pos,
-                    PixelStatus {
-                        color,
-                        source,
-                        timestamp: current_time,
-                    },
-                );
-                self.version += 1;
-                self.checksum = Some(self.calculate_checksum());
-            } else {
-                // 来自自己的事件，只有在当前位置不是他人绘制的情况下才更新
-                // 这样可以避免自己的绘制覆盖服务端真实状态
-                match self.pixels.get(&pos) {
-                    Some(existing_pixel) => {
-                        // 如果当前位置是由他人绘制的（服务端真实状态），不更新
-                        if existing_pixel.source != PixelSource::Other {
-                            // 只有当当前位置不是他人绘制时，才更新为自己的绘制
-                            self.pixels.insert(
-                                pos,
-                                PixelStatus {
-                                    color,
-                                    source,
-                                    timestamp: current_time,
-                                },
-                            );
-                            self.version += 1;
-                            self.checksum = Some(self.calculate_checksum());
-                        } else {
-                            debug!(
-                                "忽略自己的绘制事件，因为服务端显示他人已修改: ({}, {})",
-                                x, y
-                            );
-                        }
-                    }
-                    None => {
-                        // 没有现有记录，直接插入自己的绘制
-                        self.pixels.insert(
-                            pos,
-                            PixelStatus {
-                                color,
-                                source,
-                                timestamp: current_time,
-                            },
-                        );
-                        self.version += 1;
-                        self.checksum = Some(self.calculate_checksum());
-                    }
-                }
-            }
+            self.pixels.insert(
+                pos,
+                PixelStatus {
+                    color,
+                    source,
+                    timestamp: current_time,
+                },
+            );
+
+            self.version += 1;
+            self.checksum = Some(self.calculate_checksum());
         }
     }
 

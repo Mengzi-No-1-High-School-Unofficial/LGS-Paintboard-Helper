@@ -27,8 +27,8 @@ use url::Url;
 
 /// 最大包大小 (32 KB)
 const MAX_PACKET_SIZE: usize = 32 * 1024; // 32 KB
-const PENDING_PACKETS_SIZE_LIMIT: usize = 128;
-const PENDING_PACKETS_DURATION_MILLS: u64 = 1000 * 5;
+const PENDING_PACKETS_SIZE_LIMIT: usize = 32;
+const PENDING_PACKETS_DURATION_MILLS: u64 = 200;
 
 /// Refactored WebSocket provider for Winter Paintboard API
 #[derive(Clone)]
@@ -230,14 +230,17 @@ impl WsProvider {
 
         if self.config.connection_mode != ConnectionMode::ReadOnly {
             let mut self_clone = self.clone();
-            
+
             *self.send_pending_packets_by_duration_handle.lock().await =
                 Some(tokio::spawn(async move {
                     let mut interval =
                         interval(Duration::from_millis(PENDING_PACKETS_DURATION_MILLS));
 
                     loop {
-                        let _ = self_clone.send_pending_packets().await;
+                        if self_clone.pending_packets.read().await.len() >= 1 {
+                            let _ = self_clone.send_pending_packets().await;
+                        }
+
                         interval.tick().await;
                     }
                 }));
@@ -252,6 +255,7 @@ impl WsProvider {
                             >= PENDING_PACKETS_SIZE_LIMIT
                         {
                             let _ = self_clone.send_pending_packets().await;
+
                             debug!("触发 Pending Packets Limit，直接发送")
                         }
 
@@ -262,6 +266,7 @@ impl WsProvider {
     }
 
     async fn send_pending_packets(&mut self) -> Result<(), PaintboardError> {
+        // warn!("开始发送");
         let mut merged_packets: Vec<u8> = vec![];
 
         {
@@ -279,11 +284,25 @@ impl WsProvider {
         }
 
         let size = merged_packets.len();
-        let sending_result = self.connection.send_binary(merged_packets).await;
+        let sending_result = tokio::time::timeout(
+            Duration::from_millis(15 * 1000),
+            self.connection.send_binary(merged_packets),
+        )
+        .await;
+
+        if let Err(_) = sending_result {
+            error!("发送 Pending Packets 超时");
+            return Err(PaintboardError::Timeout)
+        }
+
+        let sending_result = sending_result.unwrap();
 
         match sending_result {
             Ok(_) => {
-                debug!("成功发送 Pending Packets，共计 {} 个 bytes，清空 Deque", size);
+                debug!(
+                    "成功发送 Pending Packets，共计 {} 个 bytes，清空 Deque",
+                    size
+                );
                 self.pending_packets.write().await.clear();
             }
             Err(e) => {
@@ -291,6 +310,8 @@ impl WsProvider {
                 return Err(e);
             }
         }
+
+        // warn!("发送完毕");
 
         Ok(())
     }
@@ -560,34 +581,6 @@ impl WsProvider {
         let pong_message = vec![OpCode::HeartbeatPong as u8];
         self.connection.send_binary(pong_message).await?;
         Ok(())
-    }
-
-    /// Listen for a single event from the server (helper)
-    pub async fn listen_for_events(&mut self) -> Result<ProtocolMessage, PaintboardError> {
-        if !self.connection.is_connected().await {
-            self.connection.connect().await?;
-        }
-
-        let stream = self.connection.stream();
-        let mut guard = stream.lock().await;
-        let ws_stream = guard.as_mut().ok_or(PaintboardError::ConnectionClosed)?;
-
-        if let Some(msg) = ws_stream.next().await {
-            let msg = msg.map_err(|e| PaintboardError::websocket(e.to_string()))?;
-            match msg {
-                Message::Binary(data) => ProtocolMessage::parse(&data),
-                Message::Text(_) => Err(PaintboardError::invalid_data(
-                    "Received unexpected text message",
-                )),
-                Message::Close(_) => Err(PaintboardError::ConnectionClosed),
-                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => Err(
-                    PaintboardError::invalid_data("Received unexpected WebSocket frame type"),
-                ),
-                _ => Err(PaintboardError::invalid_data("Unexpected message type")),
-            }
-        } else {
-            Err(PaintboardError::ConnectionClosed)
-        }
     }
 
     /// Properly disconnect and clean up the WebSocket connection

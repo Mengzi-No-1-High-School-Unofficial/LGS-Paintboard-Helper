@@ -18,7 +18,7 @@ pub enum Event {
     ConnectionClosed,
     /// 包含关闭状态码的 WebSocket 连接关闭事件。
     ConnectionClosedWithCode(u16),
-    /// 发生错误事件，包含错误信息。
+    /// 发生错误事件，包含错误信息。已被弃用
     ErrorOccurred(String),
 }
 
@@ -54,6 +54,7 @@ impl Event {
     ///
     /// # 参数
     /// - `message`: 错误的详细信息。
+    #[deprecated]
     pub fn error_event(message: String) -> Self {
         Event::ErrorOccurred(message)
     }
