@@ -14,7 +14,10 @@ mod app;
 /// Main async function - entry point of the application
 ///
 /// Initializes the tracing subscriber, parses command-line arguments, and starts the application
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> color_eyre::Result<()> {
+    // Initialize color-eyre for better error reporting
+    color_eyre::install()?;
+
     // Initialize tracing subscriber with environment filter (controlled by RUST_LOG)
     // tracing_subscriber::fmt()
         // .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -28,5 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("启动绘板应用...");
 
     // Run the main application logic
-    app::run_app(cli).await
+    app::run_app(cli).await.unwrap();
+
+    Ok(())
 }

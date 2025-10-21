@@ -5,10 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
+use color_eyre::Report;
 
 use super::paint_request::PaintRequest;
 use crate::app::board_sync::local_board::{LocalBoard, PixelSource};
-use winter_paintboard_sdk::PoolClient;
+use winter_paintboard_sdk::{PaintboardError, PoolClient};
 use winter_paintboard_sdk::{models::PaintStatus, PaintboardClientTrait};
 
 /// 绘制请求队列
@@ -70,7 +71,7 @@ impl PaintExecutor {
             let request = match self.request_queue.recv().await {
                 Some(req) => req,
                 None => {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                     continue;
                 }
             };
@@ -108,18 +109,30 @@ impl PaintExecutor {
 
             debug!("获取客户端成功，开始绘制");
 
-            let paint_result = conn
-                .paint_with_token(
+            // 添加超时机制，确保即使WsProvider操作挂起，连接也能被释放
+            let paint_result = tokio::time::timeout(
+                Duration::from_secs(30),
+                conn.paint_with_token(
                     request.pixel.pos,
                     request.pixel.color,
                     request.token_lease.uid(),
                     request.token_lease.token().to_string(),
                 )
-                .await;
-            debug!(
-                "绘制操作完成: ({}, {}), 结果: {:?}",
-                request.pixel.pos.x, request.pixel.pos.y, paint_result
-            );
+            ).await;
+
+            let paint_result = match paint_result {
+                Ok(result) => {
+                    debug!(
+                        "绘制操作完成: ({}, {}), 结果: {:?}",
+                        request.pixel.pos.x, request.pixel.pos.y, result
+                    );
+
+                    Ok(result.unwrap())
+                }
+                Err(_) => {
+                    Err(Report::msg("绘制操作超时（RX 长期未被 WsProvider 释放）"))
+                }
+            };
 
             paint_result
         };
@@ -164,7 +177,7 @@ impl PaintExecutor {
                 }
             }
             Err(e) => {
-                error!("绘制错误: {:?}", e);
+                    error!("绘制错误: {:?}", e);
             }
         }
     }
