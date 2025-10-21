@@ -20,11 +20,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: actions/setup-rust@v1
-        with:
-          rust-version: stable
-
       - name: Build ${{ matrix.build_type }} version
         run: cargo build --${{ matrix.build_type }}  # 根据矩阵选择 debug 或 release 构建
 
