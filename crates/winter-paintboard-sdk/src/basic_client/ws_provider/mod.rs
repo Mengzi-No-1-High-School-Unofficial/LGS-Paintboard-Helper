@@ -285,29 +285,29 @@ impl WsProvider {
 
         let size = merged_packets.len();
         let sending_result = tokio::time::timeout(
-            Duration::from_millis(15 * 1000),
+            Duration::from_millis(5 * 1000),
             self.connection.send_binary(merged_packets),
         )
         .await;
 
-        if let Err(_) = sending_result {
-            error!("发送 Pending Packets 超时");
-            return Err(PaintboardError::Timeout)
-        }
-
-        let sending_result = sending_result.unwrap();
-
         match sending_result {
-            Ok(_) => {
+            Ok(Ok(_)) => {
                 debug!(
                     "成功发送 Pending Packets，共计 {} 个 bytes，清空 Deque",
                     size
                 );
+                // 只有在成功发送后才清空队列
                 self.pending_packets.write().await.clear();
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 error!("发送 Pending Packets 错误：{:?}", e);
+                // 发送失败时不清理队列，让后台任务继续重试
                 return Err(e);
+            }
+            Err(_) => {
+                error!("发送 Pending Packets 超时");
+                // 发送超时也不清理队列，让后台任务继续重试
+                return Err(PaintboardError::Timeout);
             }
         }
 

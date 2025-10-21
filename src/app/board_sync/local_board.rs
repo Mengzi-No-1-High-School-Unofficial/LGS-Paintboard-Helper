@@ -70,7 +70,6 @@ impl LocalBoard {
             );
 
             self.version += 1;
-            self.checksum = Some(self.calculate_checksum());
         }
     }
 
@@ -106,7 +105,6 @@ impl LocalBoard {
         self.is_initialized = true;
         self.last_sync_time = Some(std::time::SystemTime::now());
         self.version += 1;
-        self.checksum = Some(self.calculate_checksum());
     }
 
     /// 从Board对象更新本地数据 - 这是权威数据
@@ -154,6 +152,7 @@ impl LocalBoard {
         for y in 0..board.height.min(self.height) {
             for x in 0..board.width.min(self.width) {
                 let pos = Pos::new(x, y).expect("Invalid coordinates during board iteration");
+
                 if let Ok(server_pixel) = board.get_pixel(x, y) {
                     let server_color = Rgb::new(server_pixel.r, server_pixel.g, server_pixel.b);
                     // 只记录不存在的像素为待添加
@@ -176,54 +175,33 @@ impl LocalBoard {
         let has_changes = !updates.is_empty() || !additions.is_empty() || !removals.is_empty();
 
         // 执行实际的更新操作
-        for (pos, new_status) in updates {
-            self.pixels.insert(pos, new_status);
+        for (pos, new_status) in &updates {
+            self.pixels.insert(pos.clone(), new_status.clone());
         }
 
-        for (pos, new_status) in additions {
-            self.pixels.insert(pos, new_status);
+        for (pos, new_status) in &additions {
+            self.pixels.insert(pos.clone(), new_status.clone());
         }
 
-        for pos in removals {
+        for pos in &removals {
             self.pixels.remove(&pos);
         }
+
+        tracing::info!("全量同步完成\n更新：{} 个像素；新增：{} 个像素；删除：{} 个像素", &updates.len(), &additions.len(), &removals.len());
 
         // 只有当实际发生了更改时，才更新版本号和校验和
         if has_changes {
             self.version += 1;
-            self.checksum = Some(self.calculate_checksum());
         }
 
         self.is_initialized = true;
         self.last_sync_time = Some(std::time::SystemTime::now());
     }
 
-    /// 计算数据校验和
-    fn calculate_checksum(&self) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        // 对像素数据进行哈希
-        for (pos, pixel_status) in &self.pixels {
-            pos.hash(&mut hasher); // Hash the Pos directly
-            pixel_status.color.r.hash(&mut hasher);
-            pixel_status.color.g.hash(&mut hasher);
-            pixel_status.color.b.hash(&mut hasher);
-            (pixel_status.source as u8).hash(&mut hasher);
-        }
-        hasher.finish()
-    }
-
     /// 检查数据完整性
+    #[deprecated(note = "不必要的完整性检查，造成性能损耗，改为返回 `true`")]
     pub fn verify_integrity(&self) -> bool {
-        if let Some(stored_checksum) = self.checksum {
-            let current_checksum = self.calculate_checksum();
-            stored_checksum == current_checksum
-        } else {
-            // 如果没有校验和，则无法验证
-            true
-        }
+        true
     }
 
     /// 检查是否已初始化
