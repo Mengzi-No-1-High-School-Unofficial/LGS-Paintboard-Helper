@@ -162,6 +162,10 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             width,
             height,
             comparison_interval,
+            enable_export,
+            enable_heatmap_export,
+            export_dir,
+            export_interval,
         } => {
             // 多 Token 模式
             run_multi_token_mode(
@@ -174,6 +178,10 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 height,
                 cd_time,
                 comparison_interval,
+                enable_export,
+                enable_heatmap_export,
+                export_dir,
+                export_interval,
             )
             .await
         }
@@ -191,6 +199,10 @@ pub async fn run_multi_token_mode(
     height: Option<u32>,
     cd_time: u64,
     comparison_interval: u64,
+    enable_export: bool,
+    enable_heatmap_export: bool,
+    export_dir: String,
+    export_interval: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::app::board_sync::BoardSyncManager;
     use crate::app::image_processing::process_image_at_all_scales;
@@ -237,6 +249,24 @@ pub async fn run_multi_token_mode(
     sync_manager.start_event_listener().await?;
 
     info!("本地绘版数据同步已启动");
+
+    // 启动绘版图片导出服务（如果启用）
+    start_export_if_enabled(
+        &sync_manager,
+        enable_export,
+        export_dir.clone(),
+        export_interval,
+    )
+    .await?;
+
+    // 启动热点图导出服务（如果启用）
+    crate::app::export::start_heatmap_export_if_enabled(
+        &sync_manager,
+        enable_heatmap_export,
+        export_dir.clone(),
+        export_interval,
+    )
+    .await?;
 
     // 处理图片
     info!("正在预处理图片数据...");

@@ -1,6 +1,11 @@
+use std::{sync::Arc, time::Duration};
+
 use rustc_hash::FxHashMap;
+use tokio::{sync::RwLock, time::sleep};
 use tracing::debug;
 use winter_paintboard_sdk::models::{Board, Pos, Rgb};
+
+const HEATMAP_EXPIRE_DURATION_MILLS: u64 = 60 * 60 * 1000;  // 1hrs
 
 // 像素状态，区分来源和时间戳
 #[repr(u8)]
@@ -22,6 +27,7 @@ pub struct PixelStatus {
 pub struct LocalBoard {
     // 使用FxHashMap存储像素位置到颜色的映射
     pixels: FxHashMap<Pos, PixelStatus>,
+    heatmap: Arc<RwLock<FxHashMap<Pos, u32>>>,
     last_sync_time: Option<std::time::SystemTime>,
     sync_status: SyncStatus,
     is_initialized: bool,
@@ -29,8 +35,6 @@ pub struct LocalBoard {
     height: u16,
     // 添加版本号以跟踪数据更新
     version: u64,
-    // 添加数据校验和用于完整性验证
-    checksum: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,13 +48,13 @@ impl LocalBoard {
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             pixels: FxHashMap::default(),
+            heatmap: Arc::new(RwLock::new(FxHashMap::default())),
             last_sync_time: None,
             sync_status: SyncStatus::Idle,
             is_initialized: false,
             width,
             height,
             version: 0,
-            checksum: None,
         }
     }
 
@@ -61,13 +65,32 @@ impl LocalBoard {
             let pos = Pos::new(x, y).expect("Invalid coordinates for Pos creation"); // Pos struct ensures valid coordinates
 
             self.pixels.insert(
-                pos,
+                pos.clone(),
                 PixelStatus {
                     color,
                     source,
                     timestamp: current_time,
                 },
             );
+
+            let heatmap = self.heatmap.clone();
+            tokio::spawn(async move {
+                {
+                    let mut heatmap = heatmap.write().await;
+                    heatmap.entry(pos.clone()).and_modify(|count| {
+                        *count += 1;
+                    });
+                }
+                
+                sleep(Duration::from_millis(HEATMAP_EXPIRE_DURATION_MILLS)).await;
+
+                {
+                    let mut heatmap = heatmap.write().await;
+                    heatmap.entry(pos).and_modify(|count| {
+                        *count -= 1;
+                    });
+                }
+            });
 
             self.version += 1;
         }
@@ -88,23 +111,9 @@ impl LocalBoard {
         &self.pixels
     }
 
-    /// 批量更新像素数据
-    pub fn update_pixels(&mut self, pixels: Vec<(Pos, Rgb)>, source: PixelSource) {
-        let current_time = std::time::SystemTime::now();
-        for (pos, color) in pixels {
-            // Pos::new 已经在 Pos 构造时进行了边界检查
-            self.pixels.insert(
-                pos,
-                PixelStatus {
-                    color,
-                    source,
-                    timestamp: current_time,
-                },
-            );
-        }
-        self.is_initialized = true;
-        self.last_sync_time = Some(std::time::SystemTime::now());
-        self.version += 1;
+    /// 获取heatmap的Arc引用，用于外部读取
+    pub fn get_heatmap(&self) -> &Arc<RwLock<FxHashMap<Pos, u32>>> {
+        &self.heatmap
     }
 
     /// 从Board对象更新本地数据 - 这是权威数据
@@ -233,11 +242,6 @@ impl LocalBoard {
     pub fn version(&self) -> u64 {
         self.version
     }
-
-    /// 获取校验和
-    pub fn checksum(&self) -> Option<u64> {
-        self.checksum
-    }
 }
 
 #[cfg(test)]
@@ -260,33 +264,6 @@ mod tests {
         board.update_pixel(10, 20, test_color, PixelSource::Own);
         assert_eq!(board.get_pixel(10, 20), Some(test_color));
         assert_eq!(board.get_pixel(11, 20), None); // No pixel at (11, 20)
-    }
-
-    #[test]
-    fn test_local_board_update_pixels() {
-        let mut board = LocalBoard::new(100, 100);
-        let pixels_to_update = vec![
-            (Pos::new(0, 0).unwrap(), Rgb::new(255, 0, 0)),
-            (Pos::new(1, 1).unwrap(), Rgb::new(0, 255, 0)),
-        ];
-        board.update_pixels(pixels_to_update, PixelSource::Own);
-        assert_eq!(board.get_pixel(0, 0), Some(Rgb::new(255, 0, 0)));
-        assert_eq!(board.get_pixel(1, 1), Some(Rgb::new(0, 255, 0)));
-    }
-
-    #[test]
-    fn test_checksum_order_independence() {
-        let mut a = LocalBoard::new(100, 100);
-        let mut b = LocalBoard::new(100, 100);
-        let p1 = Pos::new(2, 3).unwrap();
-        let p2 = Pos::new(5, 6).unwrap();
-        let c1 = Rgb::new(10, 20, 30);
-        let c2 = Rgb::new(40, 50, 60);
-        a.update_pixels(vec![(p1, c1), (p2, c2)], PixelSource::Own);
-        b.update_pixels(vec![(p2, c2), (p1, c1)], PixelSource::Own);
-        assert_eq!(a.checksum(), b.checksum());
-        assert!(a.verify_integrity());
-        assert!(b.verify_integrity());
     }
 
     #[test]

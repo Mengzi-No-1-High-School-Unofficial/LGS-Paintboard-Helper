@@ -275,6 +275,22 @@ pub enum Commands {
         /// 比对间隔（毫秒）
         #[arg(long, default_value_t = 5000)]
         comparison_interval: u64,
+
+        /// 启用绘版图片导出功能
+        #[arg(long, default_value_t = false)]
+        enable_export: bool,
+
+        /// 启用热点图导出功能
+        #[arg(long, default_value_t = false)]
+        enable_heatmap_export: bool,
+
+        /// 导出目录路径
+        #[arg(long, default_value = "exports")]
+        export_dir: String,
+
+        /// 导出间隔（秒）
+        #[arg(long, default_value_t = 30)]
+        export_interval: u64,
     },
 }
 
