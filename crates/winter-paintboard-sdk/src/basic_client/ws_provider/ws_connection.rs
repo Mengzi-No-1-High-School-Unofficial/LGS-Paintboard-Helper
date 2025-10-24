@@ -1,4 +1,6 @@
 use crate::{config::Config, error::PaintboardError, event::EventBus};
+use color_eyre::eyre::Error;
+use color_eyre::Report;
 use futures::SinkExt;
 use std::sync::Arc;
 use tokio::net::TcpStream;
@@ -88,16 +90,15 @@ impl WsConnection {
         is_some
     }
 
-    /// 发送二进制消息（将错误封装为 PaintboardError）
-    pub async fn send_binary(&self, data: Vec<u8>) -> Result<(), PaintboardError> {
+    /// 发送二进制消息
+    pub async fn send_binary(&self, data: Vec<u8>) -> Result<(), Report> {
         debug!("尝试获取连接锁进行发送，数据大小: {} 字节", data.len());
         let mut guard = self.stream.lock().await;
         debug!("获取连接锁成功");
 
-        let ws_stream = guard.as_mut().ok_or_else(|| {
-            error!("发送失败: 连接已关闭 (stream is None)");
-            PaintboardError::ConnectionClosed
-        })?;
+        let ws_stream = guard
+            .as_mut()
+            .ok_or_else(|| Report::new(PaintboardError::ConnectionClosed).wrap_err("无法获取链接"))?;
 
         debug!("开始发送二进制消息");
         match ws_stream.send(Message::Binary(data)).await {
@@ -106,12 +107,6 @@ impl WsConnection {
                 Ok(())
             }
             Err(e) => {
-                error!(
-                    "发送二进制消息失败: {} (错误类型: {:?})",
-                    e,
-                    std::any::type_name_of_val(&e)
-                );
-
                 // 检查是否是连接关闭错误
                 let error_str = e.to_string();
                 if error_str.contains("EOF") || error_str.contains("closed") {
@@ -124,7 +119,8 @@ impl WsConnection {
                     "Failed to send binary message: {}",
                     e
                 )));
-                Err(PaintboardError::websocket(e.to_string()))
+
+                Err(Report::new(e).wrap_err("发送消息失败"))
             }
         }
     }
