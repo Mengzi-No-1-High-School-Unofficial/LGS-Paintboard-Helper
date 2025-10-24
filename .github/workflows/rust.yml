@@ -15,9 +15,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 缓存 target 目录（编译结果）
+      - name: Cache Cargo build (target)
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-
       - name: Build Debug
         run: cargo build
-      
+
       - name: Build Release
         run: cargo build --release
 
