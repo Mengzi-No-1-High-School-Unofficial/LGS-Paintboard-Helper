@@ -111,7 +111,7 @@ impl PaintExecutor {
 
             // 添加超时机制，确保即使WsProvider操作挂起，连接也能被释放
             let paint_result = tokio::time::timeout(
-                Duration::from_secs(30),
+                Duration::from_secs(60),
                 conn.paint_with_token(
                     request.pixel.pos,
                     request.pixel.color,

@@ -7,7 +7,7 @@ mod ws_response_tracker;
 use crate::basic_client::ws_provider::ws_connection::WsConnection;
 use crate::basic_client::ws_provider::ws_message_handler::WsMessageHandler;
 use crate::basic_client::ws_provider::ws_rate_limiter::WsRateLimiter;
-use crate::basic_client::ws_provider::ws_reconnect::WsReconnectStrategy;
+use crate::basic_client::ws_provider::ws_reconnect::WsReconnectManager;
 use crate::basic_client::ws_provider::ws_response_tracker::WsResponseTracker;
 use crate::{
     config::{Config, ConnectionMode},
@@ -15,6 +15,7 @@ use crate::{
     event::{Event, EventBus},
     models::{OpCode, PaintOperation, PaintResult, PaintStatus, Pos, ProtocolMessage, Rgb},
 };
+use color_eyre::Report;
 use futures::{SinkExt, StreamExt};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -40,7 +41,7 @@ pub struct WsProvider {
     message_task_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
     send_pending_packets_by_duration_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
     send_pending_packets_by_limit_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
-    reconnect_strategy: Arc<TokioMutex<WsReconnectStrategy>>,
+    reconnect_manager: Arc<TokioMutex<WsReconnectManager>>,
     rate_limiter: Arc<WsRateLimiter>,
     cleanup_task_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
     message_task_ready: Arc<Notify>,
@@ -53,7 +54,7 @@ impl WsProvider {
         let connection = Arc::new(WsConnection::new(config.clone()));
         let response_tracker = Arc::new(WsResponseTracker::new());
         let message_handler = Arc::new(WsMessageHandler::new(response_tracker.clone()));
-        let reconnect_strategy = Arc::new(TokioMutex::new(WsReconnectStrategy::default()));
+        let reconnect_manager = Arc::new(TokioMutex::new(WsReconnectManager::default()));
         // 采用与原实现一致的速率：256 rps（注意：原注释存在 120/256 的混淆）
         let rate_limiter = Arc::new(WsRateLimiter::new(256));
 
@@ -78,7 +79,7 @@ impl WsProvider {
             response_tracker,
             message_handler,
             message_task_handle: Arc::new(TokioMutex::new(None)),
-            reconnect_strategy,
+            reconnect_manager,
             rate_limiter,
             cleanup_task_handle: Arc::new(TokioMutex::new(None)),
             message_task_ready: Arc::new(Notify::new()),
@@ -125,108 +126,18 @@ impl WsProvider {
             }
         }
 
-        let stream_arc = self.connection.stream();
-        let handler = self.message_handler.clone();
-        let reconnect_strategy = self.reconnect_strategy.clone();
-        let connection = self.connection.clone();
-        let config = self.config.clone();
-        let ready_notify = self.message_task_ready.clone();
+        // Start the message processing task using the new handler
+        let handle = self
+            .message_handler
+            .start_message_processing_task(
+                self.connection.clone(),
+                self.reconnect_manager.clone(),
+                self.config.clone(),
+                self.message_task_ready.clone(),
+            )
+            .await;
 
-        *self.message_task_handle.lock().await = Some(tokio::spawn(async move {
-            debug!("消息处理任务开始运行");
-
-            // 发送启动完成信号
-            ready_notify.notify_one();
-            debug!("消息处理任务启动信号已发送");
-
-            loop {
-                // Inner loop: read messages while connected
-                loop {
-                    let mut guard = stream_arc.lock().await;
-                    if let Some(ref mut ws_stream) = *guard {
-                        match ws_stream.next().await {
-                            Some(Ok(message)) => {
-                                // Drop the guard before processing to avoid holding lock
-                                drop(guard);
-                                // Delegate processing to the message handler
-                                handler
-                                    .handle_message_stream(message, stream_arc.clone())
-                                    .await;
-                            }
-                            Some(Err(e)) => {
-                                drop(guard);
-                                error!(
-                                    "WebSocket 错误: {} (错误类型: {:?})",
-                                    e,
-                                    std::any::type_name_of_val(&e)
-                                );
-                                warn!("消息处理任务检测到错误，将清理连接并尝试重连");
-
-                                // 清理可能的僵尸连接
-                                let mut cleanup_guard = stream_arc.lock().await;
-                                if cleanup_guard.is_some() {
-                                    warn!("清理错误的连接状态");
-                                    *cleanup_guard = None;
-                                }
-                                drop(cleanup_guard);
-
-                                let _ = EventBus::global()
-                                    .send(Event::error_event(format!("WebSocket error: {}", e)));
-                                break; // break inner loop to attempt reconnection
-                            }
-                            None => {
-                                drop(guard);
-                                warn!("WebSocket 连接关闭 (收到 None)，清理连接状态");
-
-                                // 清理连接
-                                let mut cleanup_guard = stream_arc.lock().await;
-                                if cleanup_guard.is_some() {
-                                    warn!("清理已关闭的连接");
-                                    *cleanup_guard = None;
-                                }
-                                drop(cleanup_guard);
-
-                                let _ = EventBus::global().send(Event::ConnectionClosed);
-                                break; // break inner loop to attempt reconnection
-                            }
-                        }
-                    } else {
-                        // No connection; wait briefly and retry
-                        drop(guard);
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                    }
-                }
-
-                // Check if reconnection is allowed
-                let mut rs = reconnect_strategy.lock().await;
-                if !rs.should_reconnect() {
-                    debug!("收到停止重连信号，退出消息处理任务");
-                    break;
-                }
-
-                // Wait according to backoff
-                let delay = rs.next_delay();
-                info!("尝试重新连接到 WebSocket 服务器，等待 {:?}", delay);
-                tokio::time::sleep(delay).await;
-
-                // Try to reconnect via shared connection
-                match connection.connect().await {
-                    Ok(_) => {
-                        debug!("WebSocket 重连成功");
-                        rs.reset();
-                        let _ = EventBus::global().send(Event::ConnectionOpened);
-                        // Continue outer loop to resume reading
-                        continue;
-                    }
-                    Err(e) => {
-                        error!("WebSocket 重连失败: {}", e);
-                        // Continue to next iteration which will backoff again
-                        continue;
-                    }
-                }
-            }
-            debug!("消息处理任务结束");
-        }));
+        *self.message_task_handle.lock().await = Some(handle);
 
         if self.config.connection_mode != ConnectionMode::ReadOnly {
             let mut self_clone = self.clone();
@@ -302,7 +213,7 @@ impl WsProvider {
             Ok(Err(e)) => {
                 error!("发送 Pending Packets 错误：{:?}", e);
                 // 发送失败时不清理队列，让后台任务继续重试
-                return Err(e);
+                return Err(e.into());
             }
             Err(_) => {
                 error!("发送 Pending Packets 超时");
@@ -376,13 +287,14 @@ impl WsProvider {
         color: Rgb,
         uid: u32,
         token: &str,
-    ) -> Result<PaintResult, PaintboardError> {
+    ) -> Result<PaintResult, Report> {
         // Rate limiting: silent drop when limited
         if !self.rate_limiter.check() {
             debug!(
                 "速率限制：paint 请求被丢弃，位置: ({}, {}), 颜色: ({}, {}, {})",
                 pos.x, pos.y, color.r, color.g, color.b
             );
+
             return Ok(PaintResult {
                 drawing_id: 0,
                 status: PaintStatus::Success,
@@ -420,12 +332,12 @@ impl WsProvider {
 
         // 单次绘图大小检查（理论上不会超过，但为完整性添加）
         if binary_data.len() > MAX_PACKET_SIZE {
-            return Err(PaintboardError::invalid_data(format!(
+            return Err(Report::new(PaintboardError::invalid_data(format!(
                 "绘图消息大小 {} 字节超过限制 {} 字节 ({}KB)",
                 binary_data.len(),
                 MAX_PACKET_SIZE,
                 MAX_PACKET_SIZE / 1024
-            )));
+            ))));
         }
 
         trace!(
@@ -442,11 +354,8 @@ impl WsProvider {
         debug!("准备发送绘图消息，paint_id: {}", paint_id);
         self.connection
             .send_binary(binary_data)
-            .await
-            .map_err(|e| {
-                error!("发送绘图消息失败 (paint_id: {}): {:?}", paint_id, e);
-                e
-            })?;
+            .await?;
+
         debug!("绘图消息已发送，等待响应 (paint_id: {})", paint_id);
 
         // Wait for response with timeout
@@ -457,7 +366,7 @@ impl WsProvider {
             }
             Ok(Err(_)) => {
                 debug!("响应通道关闭");
-                Err(PaintboardError::ResponseChannelClosed)
+                Err(Report::new(PaintboardError::ResponseChannelClosed))
             }
             Err(_) => {
                 warn!("等待响应超时 (paint_id: {}，超时: 10s)，清理通道", paint_id);
@@ -468,7 +377,7 @@ impl WsProvider {
                 let still_connected = self.connection.is_connected().await;
                 warn!("超时后连接状态: {}", still_connected);
 
-                Err(PaintboardError::timeout())
+                Err(Report::new(PaintboardError::timeout()))
             }
         }
     }
@@ -550,7 +459,7 @@ impl WsProvider {
             for paint_id in &paint_ids {
                 let _ = self.response_tracker.remove_request(*paint_id).await;
             }
-            return Err(e);
+            return Err(PaintboardError::Internal(e.to_string()));
         }
 
         // Emit own_paint_event for each operation
@@ -587,8 +496,8 @@ impl WsProvider {
     pub async fn disconnect(&mut self) -> Result<(), PaintboardError> {
         // Prevent reconnection attempts
         {
-            let mut rs = self.reconnect_strategy.lock().await;
-            rs.disable_reconnect();
+            let mut rm = self.reconnect_manager.lock().await;
+            rm.disable_reconnect();
         }
 
         {
@@ -634,6 +543,6 @@ impl WsProvider {
         token: String,
     ) -> Result<PaintResult, PaintboardError> {
         // 直接使用提供的认证信息，无需保存/恢复状态
-        self.paint_with_auth(pos, color, uid, &token).await
+        Ok(self.paint_with_auth(pos, color, uid, &token).await?)
     }
 }

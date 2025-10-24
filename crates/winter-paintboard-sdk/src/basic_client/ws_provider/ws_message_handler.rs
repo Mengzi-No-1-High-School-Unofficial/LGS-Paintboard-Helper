@@ -1,19 +1,24 @@
+use crate::basic_client::ws_provider::ws_connection::WsConnection;
+use crate::basic_client::ws_provider::ws_reconnect::WsReconnectManager;
 use crate::basic_client::ws_provider::ws_response_tracker::WsResponseTracker;
 use crate::{
-    event::EventBus,
-    models::{OpCode, PaintResult, PaintStatus, Pos, ProtocolMessage, Rgb},
+    config::Config,
+    event::{Event, EventBus},
+    models::{ProtocolMessage},
 };
-use futures::SinkExt;
+use color_eyre::eyre::Context;
+use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio::sync::Mutex as TokioMutex;
+use tokio::sync::{Mutex as TokioMutex, Notify};
+use tokio::task::JoinHandle;
+use tokio::time::Duration;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
-use tracing::{debug, error, trace, warn}; // bring `send` into scope
+use tracing::{debug, error, info, warn};
 
-/// 消息处理器：解析来自 WebSocket 的消息并分发处理逻辑。
-/// 该模块不负责轮询（next()），而是提供单条消息的处理函数，供后台任务调用。
+/// 消息处理器：管理 WebSocket 消息处理循环和连接状态
 pub struct WsMessageHandler {
     response_tracker: Arc<WsResponseTracker>,
 }
@@ -23,24 +28,19 @@ impl WsMessageHandler {
         Self { response_tracker }
     }
 
-    /// 处理单条从 WebSocket 接收到的消息。
-    /// connection_stream 用于在需要时发送心跳/响应等回包。
+    /// 处理单条从 WebSocket 接收到的消息
     pub async fn handle_message_stream(
         &self,
-        message: Message,
+        message: tokio_tungstenite::tungstenite::protocol::Message,
         connection_stream: Arc<TokioMutex<Option<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
     ) {
         match message {
             Message::Binary(data) => {
-                // debug!("📨 收到二进制消息，长度: {} 字节，前10字节: {:?}",
-                // data.len(),
-                // &data[..std::cmp::min(10, data.len())]);
-
                 let messages = ProtocolMessage::parse_batch(&data);
 
                 if let Ok(messages) = messages {
                     for message in messages {
-                        self.handle_signle_message(message, connection_stream.clone())
+                        self.handle_single_message(message, connection_stream.clone())
                             .await;
                     }
                 } else {
@@ -86,7 +86,7 @@ impl WsMessageHandler {
         }
     }
 
-    async fn handle_signle_message(
+    async fn handle_single_message(
         &self,
         protocol_msg: ProtocolMessage,
         connection_stream: Arc<TokioMutex<Option<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
@@ -97,6 +97,7 @@ impl WsMessageHandler {
                 let _ = EventBus::global().send(crate::event::Event::HeartbeatEvent);
 
                 // 回复心跳 PONG
+                use crate::models::OpCode;
                 let pong_msg = vec![OpCode::HeartbeatPong as u8];
                 debug!("💓 发送心跳 PONG 响应");
                 let mut guard = connection_stream.lock().await;
@@ -118,6 +119,7 @@ impl WsMessageHandler {
                     "🎨 收到绘图结果: drawing_id={}, status=0x{:02x}",
                     drawing_id, status
                 );
+                use crate::models::{PaintResult, PaintStatus};
                 let paint_status = PaintStatus::from(status);
                 debug!("🎨 绘图状态: {:?}", paint_status);
 
@@ -141,8 +143,6 @@ impl WsMessageHandler {
             }
 
             ProtocolMessage::PaintEvent { pos, color } => {
-                // debug!("🖌️  收到其他用户绘图事件: ({}, {}) RGB({}, {}, {})",
-                // pos.x, pos.y, color.r, color.g, color.b);
                 let _ = EventBus::global().send(crate::event::Event::other_paint_event(pos, color));
             }
 
@@ -157,6 +157,112 @@ impl WsMessageHandler {
             other => {
                 // debug!("📨 收到其他协议消息: {:?}", other);
             }
+        }
+    }
+
+    /// 启动消息处理任务，包括消息处理循环和重连逻辑
+    pub async fn start_message_processing_task(
+        &self,
+        connection: Arc<WsConnection>,
+        reconnect_manager: Arc<TokioMutex<WsReconnectManager>>,
+        config: Arc<Config>,
+        ready_notify: Arc<Notify>,
+    ) -> JoinHandle<()> {
+        let stream_arc = connection.stream();
+        let handler = self.clone();
+        let reconnect_manager_clone = reconnect_manager.clone();
+        let connection_clone = connection.clone();
+        let config_clone = config.clone();
+        let ready_notify_clone = ready_notify.clone();
+
+        tokio::spawn(async move {
+            debug!("消息处理任务开始运行");
+
+            // 发送启动完成信号
+            ready_notify_clone.notify_one();
+            debug!("消息处理任务启动信号已发送");
+
+            loop {
+                // Inner loop: read messages while connected
+                loop {
+                    let mut guard = stream_arc.lock().await;
+                    if let Some(ref mut ws_stream) = *guard {
+                        match ws_stream.next().await {
+                            Some(Ok(message)) => {
+                                // Drop the guard before processing to avoid holding lock
+                                drop(guard);
+                                // Delegate processing to the message handler
+                                handler
+                                    .handle_message_stream(message, stream_arc.clone())
+                                    .await;
+                            }
+                            Some(Err(e)) => {
+                                drop(guard);
+                                error!(
+                                    "WebSocket 错误: {} (错误类型: {:?})",
+                                    e,
+                                    std::any::type_name_of_val(&e)
+                                );
+                                warn!("消息处理任务检测到错误，将清理连接并尝试重连");
+
+                                // 清理可能的僵尸连接
+                                let mut cleanup_guard = stream_arc.lock().await;
+                                if cleanup_guard.is_some() {
+                                    warn!("清理错误的连接状态");
+                                    *cleanup_guard = None;
+                                }
+                                drop(cleanup_guard);
+
+                                let _ = EventBus::global()
+                                    .send(Event::error_event(format!("WebSocket error: {}", e)));
+                                break; // break inner loop to attempt reconnection
+                            }
+                            None => {
+                                drop(guard);
+                                warn!("WebSocket 连接关闭 (收到 None)，清理连接状态");
+
+                                // 清理连接
+                                let mut cleanup_guard = stream_arc.lock().await;
+                                if cleanup_guard.is_some() {
+                                    warn!("清理已关闭的连接");
+                                    *cleanup_guard = None;
+                                }
+                                drop(cleanup_guard);
+
+                                let _ = EventBus::global().send(Event::ConnectionClosed);
+                                break; // break inner loop to attempt reconnection
+                            }
+                        }
+                    } else {
+                        drop(guard);
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }
+
+                // Check if reconnection is allowed
+                let mut rm = reconnect_manager_clone.lock().await;
+                if !rm.should_reconnect() {
+                    debug!("收到停止重连信号，退出消息处理任务");
+                    break;
+                }
+
+                let _ = reconnect_manager_clone
+                    .lock()
+                    .await
+                    .reconnect(connection_clone.clone())
+                    .await
+                    .wrap_err("在 `WsMessageHandler` 中尝试重联失败")
+                    .map_err(|e| eprintln!("{}", e));
+            }
+            debug!("消息处理任务结束");
+        })
+    }
+}
+
+impl Clone for WsMessageHandler {
+    fn clone(&self) -> Self {
+        Self {
+            response_tracker: self.response_tracker.clone(),
         }
     }
 }

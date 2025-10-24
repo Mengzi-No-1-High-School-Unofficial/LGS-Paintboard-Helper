@@ -1,8 +1,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use color_eyre::eyre::Result;
+use tracing::{debug, info};
+
+use crate::basic_client::ws_provider::ws_connection::WsConnection;
 
 /// Reconnect strategy with exponential backoff and a flag to disable reconnection
+#[derive(Debug)]
 pub struct WsReconnectStrategy {
     should_reconnect: Arc<AtomicBool>,
     current_delay: Duration,
@@ -52,6 +57,58 @@ impl WsReconnectStrategy {
     /// Get current delay without advancing
     pub fn current_delay(&self) -> Duration {
         self.current_delay
+    }
+}
+
+/// Reconnect manager that wraps the strategy and provides async methods
+pub struct WsReconnectManager {
+    strategy: WsReconnectStrategy,
+}
+
+impl WsReconnectManager {
+    pub fn new(initial_delay: Duration, max_delay: Duration) -> Self {
+        Self {
+            strategy: WsReconnectStrategy::new(initial_delay, max_delay),
+        }
+    }
+
+    pub fn default() -> Self {
+        Self {
+            strategy: WsReconnectStrategy::default(),
+        }
+    }
+
+    pub fn should_reconnect(&self) -> bool {
+        self.strategy.should_reconnect()
+    }
+
+    pub fn disable_reconnect(&self) {
+        self.strategy.disable_reconnect();
+    }
+
+    pub async fn next_delay(&mut self) -> Duration {
+        self.strategy.next_delay()
+    }
+
+    pub async fn reset(&mut self) {
+        self.strategy.reset();
+    }
+
+    pub fn current_delay(&self) -> Duration {
+        self.strategy.current_delay()
+    }
+
+    pub async fn reconnect(&mut self, connection: Arc<WsConnection>) -> Result<()> {
+        if self.should_reconnect() {
+            let delay = self.next_delay().await;
+            info!("正在重连，请稍候...");
+            tokio::time::sleep(delay).await;
+            connection.connect().await?;
+        } else {
+            debug!("重连已禁用");
+        }
+
+        Ok(())
     }
 }
 

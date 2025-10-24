@@ -118,6 +118,9 @@ pub enum PaintboardError {
     /// 封装了另一个错误并添加了上下文信息。
     #[error("上下文错误: {0}, 源错误: {1}")]
     ContextualError(String, Box<PaintboardError>),
+
+    #[error("其他错误：{0}")]
+    ColorEyreError(color_eyre::Report)
 }
 
 impl PaintboardError {
@@ -191,6 +194,13 @@ impl PaintboardError {
     /// 创建速率限制错误的便捷方法。
     pub fn rate_limit() -> Self {
         PaintboardError::RateLimit
+    }
+}
+
+impl From<color_eyre::Report> for PaintboardError {
+    fn from(value: color_eyre::Report) -> Self {
+        eprintln!("一个错误被转换到 PaintboardError: {}", value);
+        PaintboardError::ColorEyreError(value)
     }
 }
 
