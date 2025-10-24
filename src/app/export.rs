@@ -132,7 +132,7 @@ impl ExportManager {
     fn intensity_to_color(&self, intensity: u32) -> Rgb<u8> {
         // 根据强度值生成颜色，强度越高越红
         // 可以根据需要调整颜色映射算法
-        let max_display_intensity = 100; // 设定一个最大显示强度，超过此值颜色不再变化
+        let max_display_intensity = 15; // 设定一个最大显示强度，超过此值颜色不再变化
         let normalized_intensity = std::cmp::min(intensity, max_display_intensity);
         
         // 创建一个从蓝色(低强度)到红色(高强度)的渐变
