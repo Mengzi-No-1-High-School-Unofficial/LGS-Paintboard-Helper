@@ -185,11 +185,13 @@ impl LocalBoard {
 
         // 执行实际的更新操作
         for (pos, new_status) in &updates {
-            self.pixels.insert(pos.clone(), new_status.clone());
+            // self.pixels.insert(pos.clone(), new_status.clone());
+            self.update_pixel(pos.x, pos.y, new_status.color.clone(), PixelSource::Other);
         }
 
         for (pos, new_status) in &additions {
-            self.pixels.insert(pos.clone(), new_status.clone());
+            // self.pixels.insert(pos.clone(), new_status.clone());
+            self.update_pixel(pos.x, pos.y, new_status.color.clone(), PixelSource::Other);
         }
 
         for pos in &removals {
