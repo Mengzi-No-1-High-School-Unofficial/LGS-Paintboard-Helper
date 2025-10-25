@@ -2,6 +2,7 @@ use log::info;
 use winter_paintboard_sdk::{config::Config, BasicClient, PaintboardClientTrait};
 
 use winter_paintboard_sdk::Rgb;
+use color_eyre::Report;
 
 /// 计算两个 RGB 颜色之间的差异（欧几里得距离）
 pub fn calculate_color_difference(color1: &Rgb, color2: &Rgb) -> f64 {
@@ -16,7 +17,7 @@ pub fn calculate_color_difference(color1: &Rgb, color2: &Rgb) -> f64 {
 pub async fn get_token_with_access_key(
     uid: u32,
     access_key: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, Report> {
     info!("正在使用 UID 和访问密钥获取 Token...");
     let config = Config::default();
     let http_client = BasicClient::new(config).await?;

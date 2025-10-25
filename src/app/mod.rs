@@ -108,18 +108,19 @@ pub async fn run_multi_token_mode(
     if let Some(url) = &ws_url {
         sync_config.ws_url = url.clone();
     }
+
     let mut sync_client = BasicClient::new(sync_config).await?;
+
     // 使用第一个 token 的认证信息
     if let Some(first_token) = token_config.tokens.first() {
-        let token = if let Some(token_str) = &first_token.token {
-            token_str.clone()
-        } else if let Some(access_key) = &first_token.access_key {
-            // 需要获取 token，这里暂时使用占位符
-            return Err("暂时不支持从 access_key 获取 token，请使用预获取的 token".into());
-        } else {
-            return Err("缺少 token 或 access_key".into());
+        let token = match (&first_token.token, &first_token.access_key) {
+            (Some(t), _) => t.clone(),
+            (None, Some(ak)) => get_token_with_access_key(first_token.uid, ak).await?,
+            _ => {
+                error!("配置文件中的第一个 Token 条目缺少 token 或 access_key");
+                return Err("无效的 Token 配置".into());
+            }
         };
-        sync_client.set_auth(first_token.uid, token);
     }
 
     // 启动增量同步循环

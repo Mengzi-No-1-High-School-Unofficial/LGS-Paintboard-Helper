@@ -1,20 +1,22 @@
+use color_eyre::eyre::Ok;
+use color_eyre::Report;
 use log::{debug, error, info, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tokio::time::interval;
+use tokio::time::{interval, sleep};
 
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
-use crate::app::multi_token::config::{PriorityPixel, TokenConfig};
+use crate::app::multi_token::config::{PriorityPixel, TokenConfig, TokenEntry};
 use crate::app::multi_token::paint_executor::{PaintExecutor, PaintRequestQueue};
 use crate::app::multi_token::pixel_queue::PixelQueue;
 use crate::app::multi_token::token_manager::{TokenInfo, TokenManager};
 use crate::app::multi_token::token_worker::TokenWorker;
-use crate::app::utils::calculate_color_difference;
-use winter_paintboard_sdk::PoolClient;
+use crate::app::utils::{calculate_color_difference, get_token_with_access_key};
 use winter_paintboard_sdk::{config::Config, PaintboardClientTrait};
+use winter_paintboard_sdk::{HttpProvider, PoolClient};
 
 /// 多 Token 绘制服务
 pub struct MultiTokenService {
@@ -43,25 +45,9 @@ impl MultiTokenService {
         start_x: i32,
         start_y: i32,
         comparison_interval: Duration,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Report> {
         // 解析所有 Token（将 access_key 转换为 token）
-        let mut tokens = Vec::new();
-        for entry in token_config.tokens {
-            let token = if let Some(token) = entry.token {
-                token
-            } else if let Some(access_key) = entry.access_key {
-                // 需要在这里获取 token
-                // 注意：这里需要一个 HTTP 客户端来获取 token
-                // 我们暂时使用占位符，实际实现需要调用 get_token
-                return Err("暂时不支持从 access_key 获取 token，请使用预获取的 token".into());
-            } else {
-                return Err(
-                    format!("Token entry for UID {} 缺少 token 或 access_key", entry.uid).into(),
-                );
-            };
-
-            tokens.push(TokenInfo::new(entry.uid, token));
-        }
+        let tokens = Self::fetch_tokens(&token_config).await?;
 
         // 创建共享客户端
         let mut config = Config::default();
@@ -91,7 +77,7 @@ impl MultiTokenService {
     }
 
     /// 启动服务
-    pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn start(&mut self) -> Result<(), Report> {
         info!(
             "启动多 Token 绘制服务，Token 数量: {}",
             self.token_manager.len()
@@ -161,7 +147,7 @@ impl MultiTokenService {
     }
 
     /// 停止服务
-    pub async fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn stop(&mut self) -> Result<(), Report> {
         info!("正在停止多 Token 服务...");
 
         // 设置停止信号
@@ -256,5 +242,55 @@ impl MultiTokenService {
                 info!("未检测到像素差异");
             }
         }
+    }
+
+    async fn get_token_from_entry(entry: &TokenEntry) -> Result<String, Report> {
+        let token = match (entry.uid, entry.access_key.clone(), entry.token.clone()) {
+            (uid, Some(access_key), None) => {
+                debug!("为 UID {} 获取 Token...", uid);
+
+                let token = get_token_with_access_key(uid, &access_key).await?;
+
+                info!("获取到 UID {} 的 Token", uid);
+
+                token
+            }
+            (uid, None, Some(token)) => {
+                debug!("使用提供的 Token 为 UID {}", uid);
+
+                token
+            }
+            _ => {
+                return Err(Report::msg(format!(
+                    "TokenEntry 必须提供 access_key 或 token，UID: {}",
+                    entry.uid
+                )));
+            }
+        };
+
+        Ok(token)
+    }
+
+    /// 将 [`TokenConfig`] 中的所有 [`TokenEntry`] 解析为 [`TokenInfo`] 列表
+    /// 
+    /// # Note
+    /// 
+    /// 不应为该函数增加异步并行操作，否则会触发 429 Rate Limit 错误
+    async fn fetch_tokens(token_config: &TokenConfig) -> Result<Vec<TokenInfo>, Report> {
+        let mut tokens = Vec::new();
+
+        for entry in token_config.tokens.clone() {
+            let token = Self::get_token_from_entry(&entry).await?;
+            tokens.push(TokenInfo {
+                uid: entry.uid,
+                token,
+                last_paint_time: None,
+                is_available: true,
+            });
+
+            sleep(Duration::from_millis(1000)).await; // 避免触发 429 Rate Limit
+        }
+
+        Ok(tokens)
     }
 }

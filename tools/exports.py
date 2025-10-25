@@ -6,11 +6,12 @@ df = pd.read_csv("tokens.csv")
 results: list[dict[str, str | int]] = []
 
 for idx, row in df.iterrows():
-    if row['UID'] is None or not isinstance(row['PaintKey'], str):
+    if row['UID'] is None or not isinstance(row['AccessKey'], str):
         continue
     
     result = {
         'uid': row['UID'],
+        # 'access_key': row['AccessKey'],
         'token': row['PaintKey']
     }
     
