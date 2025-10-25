@@ -3,7 +3,16 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use winter_paintboard_sdk::{config::Config, BasicClient, ClientType, PaintboardClientTrait};
 
-use crate::app::drawing::create_client;
+use winter_paintboard_sdk::Rgb;
+
+/// 计算两个 RGB 颜色之间的差异（欧几里得距离）
+pub fn calculate_color_difference(color1: &Rgb, color2: &Rgb) -> f64 {
+    let dr = (color1.r as i32 - color2.r as i32) as f64;
+    let dg = (color1.g as i32 - color2.g as i32) as f64;
+    let db = (color1.b as i32 - color2.b as i32) as f64;
+
+    ((dr * dr + dg * dg + db * db) / 3.0).sqrt()
+}
 
 /// Gets a token using UID and access key
 pub async fn get_token_with_access_key(
@@ -66,28 +75,4 @@ pub async fn resolve_auth_token(
         }
     };
     Ok(token)
-}
-
-/// 创建并配置已认证的客户端
-pub async fn create_authenticated_client(
-    ws_url: Option<String>,
-    client_type: ClientType,
-    uid: u32,
-    token: String,
-) -> Result<Arc<Mutex<Box<dyn PaintboardClientTrait + Send>>>, Box<dyn std::error::Error>> {
-    info!("正在初始化绘板客户端...");
-
-    let mut config = Config::default();
-    config.ws_url =
-        ws_url.unwrap_or_else(|| "wss://paintboard.luogu.me/api/paintboard/ws".to_string());
-
-    let client_box = create_client(config, client_type).await?;
-    let client = Arc::new(Mutex::new(client_box));
-
-    {
-        let mut cl = client.lock().await;
-        cl.as_mut().set_auth(uid, token);
-    }
-
-    Ok(client)
 }
