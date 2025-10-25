@@ -1,3 +1,8 @@
 /target
 tarpaulin-report.html
 /examples
+
+__pycache__/
+
+tokens.csv
+exported_tokens.json
