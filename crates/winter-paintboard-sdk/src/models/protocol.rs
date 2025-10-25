@@ -113,14 +113,19 @@ impl ProtocolMessage {
 
     /// Parse a single message at a specific offset in the data
     /// Returns the parsed message and the number of bytes consumed
-    fn parse_single_message_at_offset(data: &[u8], offset: usize) -> Result<(Self, usize), PaintboardError> {
+    fn parse_single_message_at_offset(
+        data: &[u8],
+        offset: usize,
+    ) -> Result<(Self, usize), PaintboardError> {
         if offset >= data.len() {
             return Err(PaintboardError::invalid_data("Offset beyond data length"));
         }
 
         let remaining_data = &data[offset..];
         if remaining_data.is_empty() {
-            return Err(PaintboardError::invalid_data("Empty data for protocol message parsing"));
+            return Err(PaintboardError::invalid_data(
+                "Empty data for protocol message parsing",
+            ));
         }
 
         let opcode = remaining_data[0];
@@ -151,7 +156,8 @@ impl ProtocolMessage {
                     u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
                 let status = payload[4];
 
-                Ok((ProtocolMessage::PaintResult { drawing_id, status }, 1 + 5)) // 1 byte opcode + 5 bytes payload
+                Ok((ProtocolMessage::PaintResult { drawing_id, status }, 1 + 5))
+                // 1 byte opcode + 5 bytes payload
             }
             _ => {
                 // For unknown opcodes, return the opcode and payload
@@ -162,16 +168,20 @@ impl ProtocolMessage {
                     _ => {
                         // For unknown opcodes, we can't determine the exact length
                         // We'll return an error to prevent consuming all remaining data
-                        return Err(PaintboardError::invalid_data(
-                            format!("Unknown opcode: 0x{:02x}", opcode)
-                        ));
+                        return Err(PaintboardError::invalid_data(format!(
+                            "Unknown opcode: 0x{:02x}",
+                            opcode
+                        )));
                     }
                 };
-                
-                Ok((ProtocolMessage::Unknown {
-                    opcode,
-                    data: payload.to_vec(),
-                }, total_consumed))
+
+                Ok((
+                    ProtocolMessage::Unknown {
+                        opcode,
+                        data: payload.to_vec(),
+                    },
+                    total_consumed,
+                ))
             }
         }
     }

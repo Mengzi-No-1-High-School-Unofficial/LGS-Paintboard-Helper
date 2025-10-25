@@ -1,7 +1,5 @@
-use log::{error, info};
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use winter_paintboard_sdk::{config::Config, BasicClient, ClientType, PaintboardClientTrait};
+use log::info;
+use winter_paintboard_sdk::{config::Config, BasicClient, PaintboardClientTrait};
 
 use winter_paintboard_sdk::Rgb;
 

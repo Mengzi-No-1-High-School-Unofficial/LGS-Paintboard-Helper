@@ -1,15 +1,17 @@
-use crate::{config::Config, Board, HttpProvider, PaintResult, PaintboardClientTrait, PaintboardError, Pos, Rgb, WsProvider};
+use crate::{
+    config::Config, Board, HttpProvider, PaintResult, PaintboardClientTrait, PaintboardError, Pos,
+    Rgb, WsProvider,
+};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::*;
-
 
 // `DelayClient` 将请求制成 Pending Packets，加入 WsProvider 的队列中并等待
 pub struct DelayClient {
     http_provider: Arc<Mutex<HttpProvider>>,
     ws_provider: Arc<RwLock<WsProvider>>,
     /// 被弃用，仅作兼容处理
-    cred: Arc<RwLock<Option<(u32, String)>>>
+    cred: Arc<RwLock<Option<(u32, String)>>>,
 }
 
 impl DelayClient {
@@ -20,7 +22,7 @@ impl DelayClient {
         Self {
             ws_provider,
             http_provider,
-            cred: Arc::new(RwLock::new(None))
+            cred: Arc::new(RwLock::new(None)),
         }
     }
 }
@@ -36,7 +38,7 @@ impl PaintboardClientTrait for DelayClient {
         )
     }
 
-     /// 设置客户端的认证信息 (deprecated - use methods with auth parameters)
+    /// 设置客户端的认证信息 (deprecated - use methods with auth parameters)
     fn set_auth(&mut self, uid: u32, token: String) {
         error!("使用已经被弃用的 set_auth 是极不恰当的，它会进行同步阻塞，并可能导致 Panic");
 
@@ -47,7 +49,7 @@ impl PaintboardClientTrait for DelayClient {
         }
 
         let rt = rt.unwrap();
-        
+
         rt.block_on(async move {
             let mut guard = self.cred.write().await;
             *guard = Some((uid, token))
@@ -77,13 +79,21 @@ impl PaintboardClientTrait for DelayClient {
     /// `Result`，成功时包含一个 `String` 类型的认证令牌，
     /// 失败时包含 `PaintboardError` (例如，认证失败或网络问题)。
     async fn get_token(&self, uid: u32, access_key: &str) -> Result<String, PaintboardError> {
-        self.http_provider.lock().await.get_token(uid, access_key).await
+        self.http_provider
+            .lock()
+            .await
+            .get_token(uid, access_key)
+            .await
     }
 
     /// 在画板的指定位置绘制一个像素 (deprecated - use paint_with_auth)
     async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError> {
         if let Some((uid, token)) = self.cred.read().await.clone() {
-            self.ws_provider.write().await.paint_delayed(pos, color, uid, &token).await
+            self.ws_provider
+                .write()
+                .await
+                .paint_delayed(pos, color, uid, &token)
+                .await
         } else {
             Err(PaintboardError::Auth("UID + Token 没有设置".to_string()))
         }
@@ -92,9 +102,15 @@ impl PaintboardClientTrait for DelayClient {
     /// 批量绘制多个像素 (deprecated - use paint_batch_with_auth)
     async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError> {
         if let Some((uid, token)) = self.cred.read().await.clone() {
-            self.ws_provider.write().await.paint_batch_with_auth(operations, uid, &token).await
+            self.ws_provider
+                .write()
+                .await
+                .paint_batch_with_auth(operations, uid, &token)
+                .await
         } else {
-            Err(PaintboardError::Auth("UID + Topaint_batchken 没有设置".to_string()))
+            Err(PaintboardError::Auth(
+                "UID + Topaint_batchken 没有设置".to_string(),
+            ))
         }
     }
 
@@ -123,7 +139,11 @@ impl PaintboardClientTrait for DelayClient {
         uid: u32,
         token: String,
     ) -> Result<crate::models::PaintResult, PaintboardError> {
-        self.ws_provider.write().await.paint_delayed(pos, color, uid, &token).await
+        self.ws_provider
+            .write()
+            .await
+            .paint_delayed(pos, color, uid, &token)
+            .await
     }
 
     /// 使用提供的认证信息批量绘制像素 (新方法)
@@ -141,6 +161,10 @@ impl PaintboardClientTrait for DelayClient {
         uid: u32,
         token: &str,
     ) -> Result<(), PaintboardError> {
-        self.ws_provider.write().await.paint_batch_with_auth(operations, uid, token).await
+        self.ws_provider
+            .write()
+            .await
+            .paint_batch_with_auth(operations, uid, token)
+            .await
     }
 }

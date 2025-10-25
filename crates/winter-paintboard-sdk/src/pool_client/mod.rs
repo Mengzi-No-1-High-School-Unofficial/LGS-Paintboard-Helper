@@ -1,13 +1,13 @@
 //! `pool_client` 模块提供了基于连接池的客户端实现。
 //! 使用 deadpool 管理多个 WriteOnly 连接，提供高效的并发绘制能力。
 
+mod delay_client;
 mod manager;
 mod pool;
-mod delay_client;
 
+pub use delay_client::DelayClient;
 pub use manager::DelayClientManager;
 pub use pool::DelayPool;
-pub use delay_client::DelayClient;
 
 use crate::{
     basic_client::BasicClient,

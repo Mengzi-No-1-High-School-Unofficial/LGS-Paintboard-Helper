@@ -120,7 +120,7 @@ pub enum PaintboardError {
     ContextualError(String, Box<PaintboardError>),
 
     #[error("其他错误：{0}")]
-    ColorEyreError(color_eyre::Report)
+    ColorEyreError(color_eyre::Report),
 }
 
 impl PaintboardError {

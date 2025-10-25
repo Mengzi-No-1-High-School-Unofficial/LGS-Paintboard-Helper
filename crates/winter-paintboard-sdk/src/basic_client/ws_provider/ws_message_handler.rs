@@ -4,7 +4,7 @@ use crate::basic_client::ws_provider::ws_response_tracker::WsResponseTracker;
 use crate::{
     config::Config,
     event::{Event, EventBus},
-    models::{ProtocolMessage},
+    models::ProtocolMessage,
 };
 use color_eyre::eyre::Context;
 use futures::{SinkExt, StreamExt};
@@ -16,7 +16,7 @@ use tokio::time::Duration;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 /// 消息处理器：管理 WebSocket 消息处理循环和连接状态
 pub struct WsMessageHandler {
@@ -240,7 +240,7 @@ impl WsMessageHandler {
                 }
 
                 // Check if reconnection is allowed
-                let mut rm = reconnect_manager_clone.lock().await;
+                let rm = reconnect_manager_clone.lock().await;
                 if !rm.should_reconnect() {
                     debug!("收到停止重连信号，退出消息处理任务");
                     break;

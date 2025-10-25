@@ -2,10 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use rustc_hash::FxHashMap;
 use tokio::{sync::RwLock, time::sleep};
-use tracing::debug;
 use winter_paintboard_sdk::models::{Board, Pos, Rgb};
 
-const HEATMAP_EXPIRE_DURATION_MILLS: u64 = 60 * 60 * 1000;  // 1hrs
+const HEATMAP_EXPIRE_DURATION_MILLS: u64 = 60 * 60 * 1000; // 1hrs
 
 // 像素状态，区分来源和时间戳
 #[repr(u8)]
@@ -80,7 +79,7 @@ impl LocalBoard {
                     let mut heatmap = heatmap.write().await;
                     *heatmap.entry(pos.clone()).or_insert(0) += 1;
                 }
-                
+
                 // 一小时后减少热力图计数
                 sleep(Duration::from_millis(HEATMAP_EXPIRE_DURATION_MILLS)).await;
 
@@ -209,7 +208,12 @@ impl LocalBoard {
             self.pixels.remove(&pos);
         }
 
-        tracing::info!("全量同步完成\n更新：{} 个像素；新增：{} 个像素；删除：{} 个像素", &updates.len(), &additions.len(), &removals.len());
+        tracing::info!(
+            "全量同步完成\n更新：{} 个像素；新增：{} 个像素；删除：{} 个像素",
+            &updates.len(),
+            &additions.len(),
+            &removals.len()
+        );
 
         // 只有当实际发生了更改时，才更新版本号和校验和
         if has_changes {

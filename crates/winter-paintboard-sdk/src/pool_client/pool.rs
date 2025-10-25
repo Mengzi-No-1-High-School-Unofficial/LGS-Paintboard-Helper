@@ -1,7 +1,5 @@
-use crate::{
-    basic_client::BasicClient, config::Config, error::PaintboardError, HttpProvider, WsProvider,
-};
-use deadpool::managed::{Pool, PoolBuilder};
+use crate::{config::Config, error::PaintboardError, HttpProvider, WsProvider};
+use deadpool::managed::Pool;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{Mutex, RwLock};
 

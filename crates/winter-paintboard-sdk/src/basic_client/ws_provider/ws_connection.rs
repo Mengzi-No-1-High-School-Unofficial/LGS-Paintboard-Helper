@@ -1,5 +1,4 @@
 use crate::{config::Config, error::PaintboardError, event::EventBus};
-use color_eyre::eyre::Error;
 use color_eyre::Report;
 use futures::SinkExt;
 use std::sync::Arc;
@@ -96,9 +95,9 @@ impl WsConnection {
         let mut guard = self.stream.lock().await;
         debug!("获取连接锁成功");
 
-        let ws_stream = guard
-            .as_mut()
-            .ok_or_else(|| Report::new(PaintboardError::ConnectionClosed).wrap_err("无法获取链接"))?;
+        let ws_stream = guard.as_mut().ok_or_else(|| {
+            Report::new(PaintboardError::ConnectionClosed).wrap_err("无法获取链接")
+        })?;
 
         debug!("开始发送二进制消息");
         match ws_stream.send(Message::Binary(data)).await {
