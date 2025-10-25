@@ -15,8 +15,7 @@ use crate::app::multi_token::pixel_queue::PixelQueue;
 use crate::app::multi_token::token_manager::{TokenInfo, TokenManager};
 use crate::app::multi_token::token_worker::TokenWorker;
 use crate::app::utils::{calculate_color_difference, get_token_with_access_key};
-use winter_paintboard_sdk::{config::Config, PaintboardClientTrait};
-use winter_paintboard_sdk::{HttpProvider, PoolClient};
+use winter_paintboard_sdk::{basic_client::AsyncClient, config::Config, PaintboardClientTrait};
 
 /// 多 Token 绘制服务
 pub struct MultiTokenService {
@@ -32,7 +31,7 @@ pub struct MultiTokenService {
     stop_signal: Arc<AtomicBool>,
     comparison_interval: Duration,
     token_manager: Arc<TokenManager>,
-    shared_client: Arc<PoolClient>,
+    shared_client: Arc<AsyncClient>,
 }
 
 impl MultiTokenService {
@@ -54,7 +53,7 @@ impl MultiTokenService {
         if let Some(url) = ws_url {
             config.ws_url = url;
         }
-        let shared_client = PoolClient::new(config).await?;
+        let shared_client = winter_paintboard_sdk::get_global_client(config).await?;
 
         // 创建 TokenManager
         let token_manager = Arc::new(TokenManager::new(tokens, token_config.cd_time_ms));
@@ -83,7 +82,7 @@ impl MultiTokenService {
             stop_signal: Arc::new(AtomicBool::new(false)),
             comparison_interval,
             token_manager,
-            shared_client: Arc::new(shared_client),
+            shared_client,
         })
     }
 
@@ -102,7 +101,6 @@ impl MultiTokenService {
             self.shared_client.clone(),
             paint_request_queue.clone(),
             self.local_board.clone(),
-            self.pixel_queue.clone(),
         );
 
         let stop_signal = self.stop_signal.clone();
@@ -111,7 +109,7 @@ impl MultiTokenService {
         }));
 
         // 为每个 Token 创建 Worker
-        let ws_url = self.shared_client.get_config().ws_url.clone();
+        // let ws_url = self.shared_client.get_config().ws_url.clone();
 
         for i in 0..self.token_manager.len() {
             let token_manager = self.token_manager.clone();

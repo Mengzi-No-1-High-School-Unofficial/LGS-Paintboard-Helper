@@ -273,8 +273,8 @@ mod tests {
         assert!(!board.is_initialized());
     }
 
-    #[test]
-    fn test_local_board_pixel_operations() {
+    #[tokio::test]
+    async fn test_local_board_pixel_operations() {
         let mut board = LocalBoard::new(100, 100);
         let test_color = Rgb::new(255, 0, 0);
 
@@ -283,8 +283,8 @@ mod tests {
         assert_eq!(board.get_pixel(11, 20), None); // No pixel at (11, 20)
     }
 
-    #[test]
-    fn test_update_from_board_applies_server_data() {
+    #[tokio::test]
+    async fn test_update_from_board_applies_server_data() {
         // create a server board and modify a few pixels, then feed to LocalBoard
         let mut server_board = Board::new();
         // set pixel (0,0) to white and (1,0) to red

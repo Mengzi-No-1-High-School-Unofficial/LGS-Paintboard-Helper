@@ -122,7 +122,7 @@ impl BoardSyncManager {
     /// 开始增量同步循环 - 只同步发生变化的区域
     pub async fn start_incremental_sync_loop(
         &self,
-        client: Box<dyn winter_paintboard_sdk::PaintboardClientTrait + Send>,
+        client: Arc<dyn winter_paintboard_sdk::PaintboardClientTrait + Send + Sync>,
         sync_interval: Duration,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let sync_manager = self.clone();

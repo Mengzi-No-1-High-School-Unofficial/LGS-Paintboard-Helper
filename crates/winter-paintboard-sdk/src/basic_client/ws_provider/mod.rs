@@ -1,3 +1,4 @@
+mod async_ws_provider;
 mod ws_connection;
 mod ws_message_handler;
 mod ws_rate_limiter;
@@ -8,7 +9,9 @@ use crate::basic_client::ws_provider::ws_connection::WsConnection;
 use crate::basic_client::ws_provider::ws_message_handler::WsMessageHandler;
 use crate::basic_client::ws_provider::ws_rate_limiter::WsRateLimiter;
 use crate::basic_client::ws_provider::ws_reconnect::WsReconnectManager;
+pub use crate::basic_client::ws_provider::async_ws_provider::AsyncWsProvider;
 use crate::basic_client::ws_provider::ws_response_tracker::WsResponseTracker;
+
 use crate::{
     config::{Config, ConnectionMode},
     error::PaintboardError,
@@ -541,4 +544,5 @@ impl WsProvider {
         // 直接使用提供的认证信息，无需保存/恢复状态
         Ok(self.paint_with_auth(pos, color, uid, &token).await?)
     }
+    
 }

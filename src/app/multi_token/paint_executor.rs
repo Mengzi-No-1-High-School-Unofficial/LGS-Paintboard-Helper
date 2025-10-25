@@ -10,8 +10,9 @@ use tokio::sync::{Mutex, RwLock};
 use super::paint_request::PaintRequest;
 use crate::app::board_sync::local_board::{LocalBoard, PixelSource};
 use crate::app::metrics::Metrics;
-use winter_paintboard_sdk::PoolClient;
-use winter_paintboard_sdk::{models::PaintStatus, PaintboardClientTrait};
+use winter_paintboard_sdk::{
+    basic_client::AsyncClient, models::PaintStatus, PaintboardClientTrait,
+};
 
 /// 绘制请求队列
 pub struct PaintRequestQueue {
@@ -43,24 +44,21 @@ impl PaintRequestQueue {
 /// 单线程绘制执行器
 #[derive(Clone)]
 pub struct PaintExecutor {
-    client: Arc<PoolClient>,
+    client: Arc<AsyncClient>,
     request_queue: Arc<PaintRequestQueue>,
     local_board: Arc<RwLock<LocalBoard>>,
-    pixel_queue: Arc<crate::app::multi_token::pixel_queue::PixelQueue>,
 }
 
 impl PaintExecutor {
     pub fn new(
-        client: Arc<PoolClient>,
+        client: Arc<AsyncClient>,
         request_queue: Arc<PaintRequestQueue>,
         local_board: Arc<RwLock<LocalBoard>>,
-        pixel_queue: Arc<crate::app::multi_token::pixel_queue::PixelQueue>,
     ) -> Self {
         Self {
             client,
             request_queue,
             local_board,
-            pixel_queue,
         }
     }
 
@@ -94,47 +92,35 @@ impl PaintExecutor {
             request.token_lease.uid()
         );
 
-        let result = {
-            let client = &self.client;
-            let conn = client.get_write_conn().await;
+        // 请求发送后就可以视为 Token 已被使用（不管服务端是否接受其，我们都将其视作进入一次 CD）
+        request.token_lease.mark_success();
 
-            if let Err(e) = conn {
-                error!("无法获取连接，绘制请求取消并等待重试: {:?}", e);
-                return;
+        debug!("获取客户端成功，开始绘制");
+
+        // 添加超时机制，确保即使WsProvider操作挂起，连接也能被释放
+        let paint_result = tokio::time::timeout(
+            Duration::from_secs(60),
+            self.client.paint_with_token(
+                request.pixel.pos,
+                request.pixel.color,
+                request.token_lease.uid(),
+                request.token_lease.token().to_string()
+            ),
+        )
+        .await;
+
+        let result = match paint_result {
+            Ok(result) => {
+                debug!(
+                    "绘制操作完成: ({}, {}), 结果: {:?}",
+                    request.pixel.pos.x, request.pixel.pos.y, result
+                );
+
+                result
             }
-
-            let mut conn = conn.unwrap();
-
-            // 请求发送后就可以视为 Token 已被使用（不管服务端是否接受其，我们都将其视作进入一次 CD）
-            request.token_lease.mark_success();
-
-            debug!("获取客户端成功，开始绘制");
-
-            // 添加超时机制，确保即使WsProvider操作挂起，连接也能被释放
-            let paint_result = tokio::time::timeout(
-                Duration::from_secs(60),
-                conn.paint_with_token(
-                    request.pixel.pos,
-                    request.pixel.color,
-                    request.token_lease.uid(),
-                    request.token_lease.token().to_string(),
-                ),
-            )
-            .await;
-
-            let paint_result = match paint_result {
-                Ok(result) => {
-                    debug!(
-                        "绘制操作完成: ({}, {}), 结果: {:?}",
-                        request.pixel.pos.x, request.pixel.pos.y, result
-                    );
-
-                    Ok(result.unwrap())
-                }
-                Err(_) => Err(Report::msg("绘制操作超时（RX 长期未被 WsProvider 释放）")),
-            };
-
-            paint_result
+            Err(_) => Err(winter_paintboard_sdk::error::PaintboardError::Internal(
+                "绘制操作超时（RX 长期未被 WsProvider 释放）".to_string(),
+            )),
         };
 
         match result {
@@ -206,10 +192,7 @@ async fn record_success_paint(request: &PaintRequest) {
         let metrics = metrics.unwrap();
         let mut metrics = metrics.write().await;
         metrics
-            .record_global_paint_success(
-                request.token_lease.uid(),
-                request.pixel.pos,
-            )
+            .record_global_paint_success(request.token_lease.uid(), request.pixel.pos)
             .await;
     }
 }
@@ -222,10 +205,7 @@ async fn record_failed_paint(request: &PaintRequest) {
         let metrics = metrics.unwrap();
         let mut metrics = metrics.write().await;
         metrics
-            .record_global_paint_failure(
-                request.token_lease.uid(),
-                request.pixel.pos,
-            )
+            .record_global_paint_failure(request.token_lease.uid(), request.pixel.pos)
             .await;
     }
 }

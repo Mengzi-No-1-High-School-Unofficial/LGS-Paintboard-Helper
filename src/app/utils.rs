@@ -1,5 +1,5 @@
 use log::info;
-use winter_paintboard_sdk::{config::Config, BasicClient, PaintboardClientTrait};
+use winter_paintboard_sdk::{config::Config, get_global_client, PaintboardClientTrait};
 
 use winter_paintboard_sdk::Rgb;
 use color_eyre::Report;
@@ -20,7 +20,7 @@ pub async fn get_token_with_access_key(
 ) -> Result<String, Report> {
     info!("正在使用 UID 和访问密钥获取 Token...");
     let config = Config::default();
-    let http_client = BasicClient::new(config).await?;
+    let http_client = get_global_client(config).await?;
     let token = http_client.get_token(uid, access_key).await?;
     info!("成功获取 Token: {}...", &token[..8]); // 显示开头部分
     Ok(token)

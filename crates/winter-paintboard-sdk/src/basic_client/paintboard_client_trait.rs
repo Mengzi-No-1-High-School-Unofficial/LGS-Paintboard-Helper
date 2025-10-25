@@ -51,17 +51,26 @@ pub trait PaintboardClientTrait {
 
     /// 在画板的指定位置绘制一个像素 (deprecated - use paint_with_auth)
     #[deprecated(note = "Use paint_with_auth instead")]
-    async fn paint(&mut self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError>;
+    async fn paint(&self, pos: Pos, color: Rgb) -> Result<PaintResult, PaintboardError>;
 
     /// 批量绘制多个像素 (deprecated - use paint_batch_with_auth)
     #[deprecated(note = "Use paint_batch_with_auth instead")]
-    async fn paint_batch(&mut self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError>;
+    async fn paint_batch(&self, operations: Vec<(Pos, Rgb)>) -> Result<(), PaintboardError>;
 
     /// 获取客户端配置信息。
     ///
     /// # 返回
     /// `Config` 的引用，用于获取连接信息等。
     fn get_config(&self) -> &Config;
+
+    /// 检查连接是否健康
+    ///
+    /// # 返回
+    /// `bool`，如果连接健康则返回 `true`，否则返回 `false`。
+    fn is_healthy(&self) -> bool {
+        // 默认实现：假设连接是健康的
+        true
+    }
 
     /// 使用临时 Token 绘制像素（不修改客户端状态）。
     ///
@@ -74,7 +83,7 @@ pub trait PaintboardClientTrait {
     /// # 返回
     /// `Result`，成功时包含 `PaintResult`，失败时包含 `PaintboardError`。
     async fn paint_with_token(
-        &mut self,
+        &self,
         pos: Pos,
         color: Rgb,
         uid: u32,
@@ -91,7 +100,7 @@ pub trait PaintboardClientTrait {
     /// # 返回
     /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
     async fn paint_batch_with_auth(
-        &mut self,
+        &self,
         operations: Vec<(Pos, Rgb)>,
         uid: u32,
         token: &str,

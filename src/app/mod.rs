@@ -8,6 +8,7 @@ pub mod metrics;
 
 use log::{error, info};
 use std::path::PathBuf;
+use std::sync::Arc;
 use winter_paintboard_sdk::basic_client::HttpProvider;
 use winter_paintboard_sdk::config::Config;
 
@@ -93,7 +94,7 @@ pub async fn run_multi_token_mode(
     use crate::app::board_sync::BoardSyncManager;
     use crate::app::image_processing::process_image_at_all_scales;
     use crate::app::multi_token::multi_token_service::MultiTokenService;
-    use winter_paintboard_sdk::{config::Config, BasicClient, PaintboardClientTrait};
+    use winter_paintboard_sdk::{config::Config, get_global_client, PaintboardClientTrait};
 
     info!("启动多 Token 绘制模式...");
 
@@ -110,7 +111,7 @@ pub async fn run_multi_token_mode(
         sync_config.ws_url = url.clone();
     }
 
-    let mut sync_client = BasicClient::new(sync_config).await?;
+    let sync_client: Arc<dyn PaintboardClientTrait + Send + Sync> = get_global_client(sync_config).await?;
 
     // 使用第一个 token 的认证信息
     if let Some(first_token) = token_config.tokens.first() {
@@ -127,7 +128,7 @@ pub async fn run_multi_token_mode(
     // 启动增量同步循环
     sync_manager
         .start_incremental_sync_loop(
-            Box::new(sync_client),
+            sync_client,
             tokio::time::Duration::from_millis(comparison_interval),
         )
         .await?;
