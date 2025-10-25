@@ -5,9 +5,9 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::interval;
 
+use crate::app::utils::calculate_color_difference;
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
-use crate::app::incremental::pixel_comparison::calculate_color_difference;
 use crate::app::multi_token::config::{PriorityPixel, TokenConfig};
 use crate::app::multi_token::paint_executor::{PaintExecutor, PaintRequestQueue};
 use crate::app::multi_token::pixel_queue::PixelQueue;
