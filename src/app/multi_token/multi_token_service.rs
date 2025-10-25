@@ -59,11 +59,22 @@ impl MultiTokenService {
         // 创建 TokenManager
         let token_manager = Arc::new(TokenManager::new(tokens, token_config.cd_time_ms));
 
+        // 创建 Metrics 打印任务
+        let token_manager_clone = token_manager.clone();
+        let stop_signal_clone = Arc::new(AtomicBool::new(false));
+        let metrics_handle = {
+            let stop_signal = stop_signal_clone.clone();
+            
+            tokio::spawn(async move {
+                Self::print_metrics_loop(token_manager_clone, stop_signal).await;
+            })
+        };
+
         Ok(Self {
             workers: Vec::new(),
             executor_handle: None,
             comparison_handle: None,
-            metrics_handle: None,
+            metrics_handle: Some(metrics_handle),
             pixel_queue: Arc::new(PixelQueue::new()),
             local_board,
             target_image,
@@ -292,5 +303,55 @@ impl MultiTokenService {
         }
 
         Ok(tokens)
+    }
+
+    async fn print_metrics_loop(
+        token_manager: Arc<TokenManager>,
+        stop_signal: Arc<AtomicBool>,
+    ) {
+        use crate::app::metrics::Metrics;
+
+        let mut interval_timer = interval(Duration::from_secs(60));
+
+        loop {
+            if stop_signal.load(Ordering::Acquire) {
+                break;
+            }
+
+            interval_timer.tick().await;
+            
+            let metrics = Metrics::get_instance();
+
+            if let Err(e) = metrics {
+                error!("获取全局指标存储失败: {:?}", e);
+                continue;
+            }
+
+            let metrics = metrics.unwrap();
+            let metrics = metrics.read().await;
+
+            info!("=== 全局绘制指标 ===");
+            info!("总绘制像素数: {}", metrics.global.total_painted_pixels);
+            info!("成功绘制像素数: {}", metrics.global.successful_painted_pixels);
+            info!("失败绘制像素数: {}", metrics.global.failed_painted_pixels);
+            info!("===================");
+
+            for token_info in token_manager.get_all_tokens() {
+                let uid = token_info.uid;
+                let token_metrics = metrics.tokens.get(&uid);
+
+                if let Some(token_metrics) = token_metrics {
+                    let token_metrics = token_metrics.read().await;
+                    info!("--- Token UID: {} 指标 ---", uid);
+                    info!("总绘制像素数: {}", token_metrics.painted_pixels);
+                    info!("成功绘制像素数: {}", token_metrics.successful_painted_pixels);
+                    info!("失败绘制像素数: {}", token_metrics.failed_painted_pixels);
+                    info!("绘制速率 (像素/分钟): {:.2}", token_metrics.get_recent_paint_rate());
+                    info!("-------------------------");
+                } else {
+                    info!("Token UID: {} 无指标数据", uid);
+                }
+            }
+        }
     }
 }

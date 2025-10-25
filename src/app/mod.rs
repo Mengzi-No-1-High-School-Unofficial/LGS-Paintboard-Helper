@@ -4,6 +4,7 @@ pub mod export;
 pub mod image_processing;
 pub mod multi_token;
 pub mod utils;
+pub mod metrics;
 
 use log::{error, info};
 use std::path::PathBuf;

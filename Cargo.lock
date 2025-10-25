@@ -1326,6 +1326,7 @@ dependencies = [
  "env_logger",
  "image",
  "log",
+ "once_cell",
  "parking_lot",
  "rustc-hash",
  "serde",

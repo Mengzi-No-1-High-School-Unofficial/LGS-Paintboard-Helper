@@ -1,3 +1,4 @@
+use clap::error;
 use color_eyre::Report;
 use log::{debug, error, info, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,6 +9,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::paint_request::PaintRequest;
 use crate::app::board_sync::local_board::{LocalBoard, PixelSource};
+use crate::app::metrics::Metrics;
 use winter_paintboard_sdk::PoolClient;
 use winter_paintboard_sdk::{models::PaintStatus, PaintboardClientTrait};
 
@@ -157,6 +159,8 @@ impl PaintExecutor {
                             );
                         }
 
+                        record_success_paint(&request).await;
+
                         // 标记成功，启动 CD
                         request.token_lease.mark_success();
 
@@ -168,15 +172,22 @@ impl PaintExecutor {
                     PaintStatus::Cooldown => {
                         // 不必处理重试，循环比对会忽略
                         info!("Token {} 仍在 CD 中", request.token_lease.uid());
+
+                        record_failed_paint(&request).await;
                     }
                     PaintStatus::InvalidToken => {
-                        warn!(
-                            "绘制失败: Token {} 无效或已过期",
-                            request.token_lease.uid()
-                        );
+                        warn!("绘制失败: Token {} 无效或已过期", request.token_lease.uid());
+
+                        record_failed_paint(&request).await;
                     }
                     _ => {
-                        warn!("绘制失败(token = {}): {:?}", request.token_lease.uid(), paint_result.status);
+                        warn!(
+                            "绘制失败(token = {}): {:?}",
+                            request.token_lease.uid(),
+                            paint_result.status
+                        );
+
+                        record_failed_paint(&request).await;
                     }
                 }
             }
@@ -184,5 +195,37 @@ impl PaintExecutor {
                 error!("绘制错误: {:?}", e);
             }
         }
+    }
+}
+
+async fn record_success_paint(request: &PaintRequest) {
+    let metrics = Metrics::get_instance();
+    if let Err(e) = metrics {
+        error!("获取全局指标存储失败: {:?}", e);
+    } else {
+        let metrics = metrics.unwrap();
+        let mut metrics = metrics.write().await;
+        metrics
+            .record_global_paint_success(
+                request.token_lease.uid(),
+                request.pixel.pos,
+            )
+            .await;
+    }
+}
+
+async fn record_failed_paint(request: &PaintRequest) {
+    let metrics = Metrics::get_instance();
+    if let Err(e) = metrics {
+        error!("获取全局指标存储失败: {:?}", e);
+    } else {
+        let metrics = metrics.unwrap();
+        let mut metrics = metrics.write().await;
+        metrics
+            .record_global_paint_failure(
+                request.token_lease.uid(),
+                request.pixel.pos,
+            )
+            .await;
     }
 }
