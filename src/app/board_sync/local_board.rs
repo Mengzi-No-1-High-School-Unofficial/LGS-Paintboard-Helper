@@ -75,20 +75,31 @@ impl LocalBoard {
 
             let heatmap = self.heatmap.clone();
             tokio::spawn(async move {
+                // 增加热力图计数
                 {
                     let mut heatmap = heatmap.write().await;
-                    heatmap.entry(pos.clone()).and_modify(|count| {
-                        *count += 1;
-                    });
+                    *heatmap.entry(pos.clone()).or_insert(0) += 1;
                 }
                 
+                // 一小时后减少热力图计数
                 sleep(Duration::from_millis(HEATMAP_EXPIRE_DURATION_MILLS)).await;
 
                 {
                     let mut heatmap = heatmap.write().await;
-                    heatmap.entry(pos).and_modify(|count| {
-                        *count -= 1;
-                    });
+                    match heatmap.entry(pos) {
+                        std::collections::hash_map::Entry::Occupied(mut entry) => {
+                            let count = entry.get_mut();
+                            if *count > 0 {
+                                *count -= 1;
+                                if *count == 0 {
+                                    entry.remove();
+                                }
+                            }
+                        }
+                        std::collections::hash_map::Entry::Vacant(_) => {
+                            // 如果条目不存在，无需操作
+                        }
+                    }
                 }
             });
 
