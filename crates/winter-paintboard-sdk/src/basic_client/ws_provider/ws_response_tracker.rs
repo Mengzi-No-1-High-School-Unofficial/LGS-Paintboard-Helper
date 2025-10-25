@@ -1,16 +1,16 @@
 use crate::models::{PaintResult, PaintStatus};
-use std::collections::HashMap;
-use std::sync::{Arc};
 use once_cell::sync::OnceCell;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex as TokioMutex};
 use tokio::time::{Duration, Instant};
 
 static GLOBAL_WS_RESPONSE_TRACKER: OnceCell<WsResponseTracker> = OnceCell::new();
 
 /// 响应追踪器：管理 paint 请求对应的 oneshot 发送端
-/// 
+///
 /// 全局追踪器为 [`GLOBAL_WS_RESPONSE_TRACKER`]，默认 [`WsResponseTracker::new`] 返回全局追踪器（不存在则创建）
-/// 
+///
 /// 如果需要独立的追踪器，请使用 [`WsResponseTracker::new_local`]
 #[derive(Clone)]
 pub struct WsResponseTracker {
@@ -20,14 +20,12 @@ pub struct WsResponseTracker {
 impl WsResponseTracker {
     /// 返回全局追踪器，如不存在则使用 [`WsResponseTracker::new_local`] 创建
     pub fn new() -> Self {
-        let tracker = GLOBAL_WS_RESPONSE_TRACKER.get_or_init(|| {
-            WsResponseTracker::new_local()
-        });
+        let tracker = GLOBAL_WS_RESPONSE_TRACKER.get_or_init(|| WsResponseTracker::new_local());
 
         // 成员变量均为 Arc + Mutex，直接 Clone 不会导致引用的丢失
         tracker.clone()
     }
-    
+
     /// 创建新的追踪器（无论是否存在全局追踪器）
     pub fn new_local() -> Self {
         Self {

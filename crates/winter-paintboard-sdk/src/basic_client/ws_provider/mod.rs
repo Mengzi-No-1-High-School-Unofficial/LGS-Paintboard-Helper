@@ -13,18 +13,16 @@ use crate::{
     config::{Config, ConnectionMode},
     error::PaintboardError,
     event::{Event, EventBus},
-    models::{OpCode, PaintOperation, PaintResult, PaintStatus, Pos, ProtocolMessage, Rgb},
+    models::{OpCode, PaintOperation, PaintResult, PaintStatus, Pos, Rgb},
 };
 use color_eyre::Report;
 use futures::{SinkExt, StreamExt};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::{oneshot, Mutex as TokioMutex, Notify, RwLock};
+use tokio::sync::{Mutex as TokioMutex, Notify, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, timeout, Duration};
-use tokio_tungstenite::tungstenite::protocol::Message;
-use tracing::{debug, error, info, trace, warn};
-use url::Url;
+use tracing::{debug, error, trace, warn};
 
 /// 最大包大小 (32 KB)
 const MAX_PACKET_SIZE: usize = 32 * 1024; // 32 KB
@@ -352,9 +350,7 @@ impl WsProvider {
 
         // Send binary
         debug!("准备发送绘图消息，paint_id: {}", paint_id);
-        self.connection
-            .send_binary(binary_data)
-            .await?;
+        self.connection.send_binary(binary_data).await?;
 
         debug!("绘图消息已发送，等待响应 (paint_id: {})", paint_id);
 
@@ -496,7 +492,7 @@ impl WsProvider {
     pub async fn disconnect(&mut self) -> Result<(), PaintboardError> {
         // Prevent reconnection attempts
         {
-            let mut rm = self.reconnect_manager.lock().await;
+            let rm = self.reconnect_manager.lock().await;
             rm.disable_reconnect();
         }
 

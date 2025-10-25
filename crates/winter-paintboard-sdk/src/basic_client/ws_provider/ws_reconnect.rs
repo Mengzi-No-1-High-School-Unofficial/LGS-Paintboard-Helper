@@ -1,7 +1,7 @@
+use color_eyre::eyre::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use color_eyre::eyre::Result;
 use tracing::{debug, info};
 
 use crate::basic_client::ws_provider::ws_connection::WsConnection;

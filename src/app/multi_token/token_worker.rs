@@ -1,18 +1,11 @@
-use log::{debug, error, warn};
+use log::{debug, error};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
-use tokio::time::sleep;
 
-use crate::app::board_sync::local_board::{LocalBoard, PixelSource};
-use crate::app::multi_token::config::PriorityPixel;
 use crate::app::multi_token::pixel_queue::PixelQueue;
 use crate::app::multi_token::token_manager::TokenManager;
-use winter_paintboard_sdk::{
-    models::{PaintResult, PaintStatus},
-    PaintboardClientTrait, Pos, Rgb,
-};
+use winter_paintboard_sdk::PaintboardClientTrait;
 
 /// Token 工作器
 pub struct TokenWorker {

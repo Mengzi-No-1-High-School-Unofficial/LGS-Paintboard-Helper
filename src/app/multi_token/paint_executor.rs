@@ -1,15 +1,14 @@
+use color_eyre::Report;
 use log::{debug, error, info, warn};
-use std::f32::consts::E;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
-use color_eyre::Report;
 
 use super::paint_request::PaintRequest;
 use crate::app::board_sync::local_board::{LocalBoard, PixelSource};
-use winter_paintboard_sdk::{PaintboardError, PoolClient};
+use winter_paintboard_sdk::PoolClient;
 use winter_paintboard_sdk::{models::PaintStatus, PaintboardClientTrait};
 
 /// 绘制请求队列
@@ -117,8 +116,9 @@ impl PaintExecutor {
                     request.pixel.color,
                     request.token_lease.uid(),
                     request.token_lease.token().to_string(),
-                )
-            ).await;
+                ),
+            )
+            .await;
 
             let paint_result = match paint_result {
                 Ok(result) => {
@@ -129,9 +129,7 @@ impl PaintExecutor {
 
                     Ok(result.unwrap())
                 }
-                Err(_) => {
-                    Err(Report::msg("绘制操作超时（RX 长期未被 WsProvider 释放）"))
-                }
+                Err(_) => Err(Report::msg("绘制操作超时（RX 长期未被 WsProvider 释放）")),
             };
 
             paint_result
@@ -150,7 +148,7 @@ impl PaintExecutor {
                                 request.pixel.color,
                                 PixelSource::Own,
                             );
-    
+
                             info!(
                                 "成功在 ({}, {}) 使用 Token {} 绘制像素",
                                 request.pixel.pos.x,
@@ -177,7 +175,7 @@ impl PaintExecutor {
                 }
             }
             Err(e) => {
-                    error!("绘制错误: {:?}", e);
+                error!("绘制错误: {:?}", e);
             }
         }
     }

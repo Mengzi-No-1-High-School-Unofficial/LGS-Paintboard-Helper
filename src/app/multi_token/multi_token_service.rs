@@ -2,10 +2,9 @@ use log::{debug, error, info, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tokio::time::interval;
 
-use crate::app::utils::calculate_color_difference;
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
 use crate::app::multi_token::config::{PriorityPixel, TokenConfig};
@@ -13,8 +12,9 @@ use crate::app::multi_token::paint_executor::{PaintExecutor, PaintRequestQueue};
 use crate::app::multi_token::pixel_queue::PixelQueue;
 use crate::app::multi_token::token_manager::{TokenInfo, TokenManager};
 use crate::app::multi_token::token_worker::TokenWorker;
+use crate::app::utils::calculate_color_difference;
 use winter_paintboard_sdk::PoolClient;
-use winter_paintboard_sdk::{config::Config, BasicClient, PaintboardClientTrait};
+use winter_paintboard_sdk::{config::Config, PaintboardClientTrait};
 
 /// 多 Token 绘制服务
 pub struct MultiTokenService {

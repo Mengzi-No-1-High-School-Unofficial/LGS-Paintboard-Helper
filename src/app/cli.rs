@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
 
 /// Winter Paintboard CLI client - 在洛谷画板上绘制图像的工具
 #[derive(Parser)]

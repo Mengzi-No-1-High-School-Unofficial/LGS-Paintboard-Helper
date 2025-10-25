@@ -3,7 +3,7 @@ use log::{error, info, warn};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 
 use crate::app::board_sync::{BoardSyncManager, LocalBoard};
@@ -85,9 +85,7 @@ impl ExportManager {
             .as_secs();
 
         // 构建输出文件路径
-        let output_path = self
-            .export_dir
-            .join(format!("heatmap_{}.png", timestamp));
+        let output_path = self.export_dir.join(format!("heatmap_{}.png", timestamp));
 
         // 获取本地绘版的热点图数据并导出为图片
         {
@@ -109,10 +107,10 @@ impl ExportManager {
             for y in 0..height {
                 for x in 0..width {
                     let pos = winter_paintboard_sdk::models::Pos::new(x, y).unwrap();
-                    
+
                     // 根据热点图值确定颜色强度
                     let intensity = *heatmap_data.get(&pos).unwrap_or(&0);
-                    
+
                     // 将强度值转换为颜色（强度越高越红）
                     let pixel = self.intensity_to_color(intensity);
                     img.put_pixel(x as u32, y as u32, pixel);
@@ -134,14 +132,14 @@ impl ExportManager {
         // 可以根据需要调整颜色映射算法
         let max_display_intensity = 15; // 设定一个最大显示强度，超过此值颜色不再变化
         let normalized_intensity = std::cmp::min(intensity, max_display_intensity);
-        
+
         // 创建一个从蓝色(低强度)到红色(高强度)的渐变
         let ratio = normalized_intensity as f32 / max_display_intensity as f32;
-        
+
         let r = (255.0 * ratio) as u8;
         let g = (128.0 * (1.0 - ratio)) as u8;
         let b = (255.0 * (1.0 - ratio)) as u8;
-        
+
         Rgb([r, g, b])
     }
 

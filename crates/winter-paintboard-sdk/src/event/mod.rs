@@ -1,5 +1,5 @@
 use crate::models::{Pos, Rgb};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use tokio::sync::broadcast;
 
 /// Winter Paintboard SDK 的事件类型。
