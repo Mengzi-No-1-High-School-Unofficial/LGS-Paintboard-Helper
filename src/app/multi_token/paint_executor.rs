@@ -169,8 +169,14 @@ impl PaintExecutor {
                         // 不必处理重试，循环比对会忽略
                         info!("Token {} 仍在 CD 中", request.token_lease.uid());
                     }
+                    PaintStatus::InvalidToken => {
+                        warn!(
+                            "绘制失败: Token {} 无效或已过期",
+                            request.token_lease.uid()
+                        );
+                    }
                     _ => {
-                        warn!("绘制失败: {:?}", paint_result.status);
+                        warn!("绘制失败(token = {}): {:?}", request.token_lease.uid(), paint_result.status);
                     }
                 }
             }
