@@ -2,7 +2,7 @@ use crate::{
     config::{Config, ConnectionMode},
     error::PaintboardError,
     event::{Event, EventBus},
-    models::{OpCode, PaintOperation, PaintResult, PaintStatus, Pos, Rgb, ProtocolMessage},
+    models::{OpCode, PaintOperation, PaintResult, PaintStatus, Pos, ProtocolMessage, Rgb},
 };
 use color_eyre::Report;
 use futures::{SinkExt, StreamExt};
@@ -13,7 +13,10 @@ use tokio::task::JoinHandle;
 use tokio::time::{interval, timeout, Duration, Instant};
 use tracing::{debug, error, trace, warn};
 
-use super::{ws_rate_limiter::WsRateLimiter, ws_reconnect::WsReconnectManager, ws_response_tracker::WsResponseTracker};
+use super::{
+    ws_rate_limiter::WsRateLimiter, ws_reconnect::WsReconnectManager,
+    ws_response_tracker::WsResponseTracker,
+};
 
 /// 最大包大小 (32 KB)
 const MAX_PACKET_SIZE: usize = 32 * 1024; // 32 KB
@@ -67,9 +70,22 @@ struct WsActor {
     /// 用于发送消息的通道
     sender: mpsc::UnboundedSender<WsActorMessage>,
     /// WebSocket 发送端
-    ws_sender: Option<futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::protocol::Message>>,
+    ws_sender: Option<
+        futures::stream::SplitSink<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            tokio_tungstenite::tungstenite::protocol::Message,
+        >,
+    >,
     /// WebSocket 接收流
-    ws_receiver_stream: Option<futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>>,
+    ws_receiver_stream: Option<
+        futures::stream::SplitStream<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+        >,
+    >,
     /// 消息处理任务句柄
     message_task_handle: Option<JoinHandle<()>>,
     /// 发送按时间间隔触发的任务句柄
@@ -120,7 +136,8 @@ impl WsActor {
         self.start_cleanup_task().await;
 
         // 主循环：处理来自通道的消息和发送待处理数据包
-        let mut duration_interval = tokio::time::interval(Duration::from_millis(PENDING_PACKETS_DURATION_MILLS));
+        let mut duration_interval =
+            tokio::time::interval(Duration::from_millis(PENDING_PACKETS_DURATION_MILLS));
         let mut limit_check_interval = tokio::time::interval(Duration::from_millis(100)); // 每100ms检查一次
 
         loop {
@@ -230,7 +247,10 @@ impl WsActor {
                 let result = self.send_binary_internal(data).await;
                 let _ = response_tx.send(result);
             }
-            SendRequest::SendPong { payload, response_tx } => {
+            SendRequest::SendPong {
+                payload,
+                response_tx,
+            } => {
                 let result = self.send_pong_internal(payload).await;
                 let _ = response_tx.send(result);
             }
@@ -298,13 +318,19 @@ impl WsActor {
         debug!("尝试发送二进制消息，数据大小: {} 字节", data.len());
 
         if !self.connected {
-            return Err(Report::new(PaintboardError::ConnectionClosed)
-                .wrap_err("无法发送消息，连接未建立"));
+            return Err(
+                Report::new(PaintboardError::ConnectionClosed).wrap_err("无法发送消息，连接未建立")
+            );
         }
 
         if let Some(ref mut ws_sender) = self.ws_sender {
             debug!("开始发送二进制消息");
-            match ws_sender.send(tokio_tungstenite::tungstenite::protocol::Message::Binary(data)).await {
+            match ws_sender
+                .send(tokio_tungstenite::tungstenite::protocol::Message::Binary(
+                    data,
+                ))
+                .await
+            {
                 Ok(_) => {
                     debug!("二进制消息发送成功");
                     // 更新上次发送时间
@@ -313,27 +339,32 @@ impl WsActor {
                 }
                 Err(e) => {
                     // 检查是否是连接关闭错误
-                    let error_str = e.to_string();
-                    if error_str.contains("EOF") || error_str.contains("closed") {
-                        error!("检测到连接已关闭，清理连接状态");
-                        self.connected = false;
-                        self.ws_sender = None;
-                        self.ws_receiver_stream = None;
+                    match e {
+                        tokio_tungstenite::tungstenite::Error::ConnectionClosed => {
+                            error!("检测到连接已关闭，清理连接状态");
+                            self.connected = false;
+                            self.ws_sender = None;
+                            self.ws_receiver_stream = None;
+                            self.connect_internal().await?;
+                        }
+                        tokio_tungstenite::tungstenite::Error::AlreadyClosed => {
+                            error!("检测到连接已关闭，清理连接状态");
+                            self.connected = false;
+                            self.ws_sender = None;
+                            self.ws_receiver_stream = None;
+                            self.connect_internal().await?;
+                        },
+                        _ => {
+                            return Err(Report::new(e).wrap_err("发送消息失败"));
+                        }
                     }
-
-                    let event_bus = EventBus::global();
-                    let _ = event_bus.send(Event::error_event(format!(
-                        "Failed to send binary message: {}",
-                        e
-                    )));
 
                     Err(Report::new(e).wrap_err("发送消息失败"))
                 }
             }
         } else {
             self.connected = false;
-            Err(Report::new(PaintboardError::ConnectionClosed)
-                .wrap_err("WebSocket 发送端不存在"))
+            Err(Report::new(PaintboardError::ConnectionClosed).wrap_err("WebSocket 发送端不存在"))
         }
     }
 
@@ -347,7 +378,12 @@ impl WsActor {
 
         if let Some(ref mut ws_sender) = self.ws_sender {
             debug!("开始发送 Pong 消息");
-            match ws_sender.send(tokio_tungstenite::tungstenite::protocol::Message::Pong(payload)).await {
+            match ws_sender
+                .send(tokio_tungstenite::tungstenite::protocol::Message::Pong(
+                    payload,
+                ))
+                .await
+            {
                 Ok(_) => {
                     debug!("Pong 消息发送成功");
                     // 更新上次发送时间
@@ -355,28 +391,32 @@ impl WsActor {
                     Ok(())
                 }
                 Err(e) => {
-                    // 检查是否是连接关闭错误
-                    let error_str = e.to_string();
-                    if error_str.contains("EOF") || error_str.contains("closed") {
-                        error!("检测到连接已关闭，清理连接状态");
-                        self.connected = false;
-                        self.ws_sender = None;
-                        self.ws_receiver_stream = None;
+                    match e {
+                        tokio_tungstenite::tungstenite::Error::ConnectionClosed => {
+                            error!("检测到连接已关闭，清理连接状态");
+                            self.connected = false;
+                            self.ws_sender = None;
+                            self.ws_receiver_stream = None;
+                            self.connect_internal().await?;
+                        }
+                        tokio_tungstenite::tungstenite::Error::AlreadyClosed => {
+                            error!("检测到连接已关闭，清理连接状态");
+                            self.connected = false;
+                            self.ws_sender = None;
+                            self.ws_receiver_stream = None;
+                            self.connect_internal().await?;
+                        },
+                        _ => {
+                            return Err(Report::new(e).wrap_err("发送 Pong 消息失败"));
+                        }
                     }
-
-                    let event_bus = EventBus::global();
-                    let _ = event_bus.send(Event::error_event(format!(
-                        "Failed to send pong message: {}",
-                        e
-                    )));
 
                     Err(Report::new(e).wrap_err("发送 Pong 消息失败"))
                 }
             }
         } else {
             self.connected = false;
-            Err(Report::new(PaintboardError::ConnectionClosed)
-                .wrap_err("WebSocket 发送端不存在"))
+            Err(Report::new(PaintboardError::ConnectionClosed).wrap_err("WebSocket 发送端不存在"))
         }
     }
 
@@ -390,7 +430,8 @@ impl WsActor {
     }
 
     async fn start_message_processing_task(&mut self) {
-        if let Some(read) = self.ws_receiver_stream.take() { // Take ownership of ws_receiver_stream
+        if let Some(read) = self.ws_receiver_stream.take() {
+            // Take ownership of ws_receiver_stream
             let response_tracker_clone = self.response_tracker.clone();
             let config_clone = self.config.clone();
             let reconnect_manager_clone = self.reconnect_manager.clone();
@@ -402,22 +443,29 @@ impl WsActor {
                     config_clone,
                     reconnect_manager_clone,
                     actor_sender.clone(), // Clone again for the loop
-                ).await;
+                )
+                .await;
                 // After the message loop ends (due to error or close), mark the connection as disconnected
-                let _ = actor_sender.send(WsActorMessage::Connection(ConnectionRequest::MarkDisconnected));
+                let _ = actor_sender.send(WsActorMessage::Connection(
+                    ConnectionRequest::MarkDisconnected,
+                ));
             });
 
             self.message_task_handle = Some(task_handle);
         }
 
         debug!("开始启动消息处理任务");
-        
+
         // 重置连接状态通知
         self.message_task_ready.notify_one();
         debug!("后台消息处理任务已启动");
     }
     async fn message_processing_loop(
-        mut ws_stream: futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+        mut ws_stream: futures::stream::SplitStream<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+        >,
         response_tracker: Arc<WsResponseTracker>,
         config: Arc<Config>,
         reconnect_manager: Arc<TokioMutex<WsReconnectManager>>,
@@ -432,7 +480,12 @@ impl WsActor {
 
                             if let Ok(messages) = messages {
                                 for protocol_msg in messages {
-                                    Self::handle_protocol_message(protocol_msg, response_tracker.clone(), actor_sender.clone()).await; // Pass sender to handle_protocol_message
+                                    Self::handle_protocol_message(
+                                        protocol_msg,
+                                        response_tracker.clone(),
+                                        actor_sender.clone(),
+                                    )
+                                    .await; // Pass sender to handle_protocol_message
                                 }
                             } else {
                                 error!(
@@ -447,10 +500,11 @@ impl WsActor {
                             // Send Pong response using the actor's sender
                             let pong_payload = payload.clone(); // Clone payload
                             let (response_tx, _) = oneshot::channel(); // Dummy channel, we don't care about the result here
-                            let _ = actor_sender.send(WsActorMessage::Send(SendRequest::SendPong {
-                                payload: pong_payload,
-                                response_tx,
-                            }));
+                            let _ =
+                                actor_sender.send(WsActorMessage::Send(SendRequest::SendPong {
+                                    payload: pong_payload,
+                                    response_tx,
+                                }));
                         }
 
                         tokio_tungstenite::tungstenite::protocol::Message::Pong(_) => {
@@ -477,9 +531,8 @@ impl WsActor {
                 }
                 Some(Err(e)) => {
                     error!("WebSocket 错误: {}", e);
-                    let _ = EventBus::global().send(
-                        Event::error_event(format!("WebSocket error: {}", e))
-                    );
+                    let _ = EventBus::global()
+                        .send(Event::error_event(format!("WebSocket error: {}", e)));
                     break; // 退出循环
                 }
                 None => {
@@ -507,7 +560,6 @@ impl WsActor {
                     data: pong_msg,
                     response_tx,
                 }));
-
             }
 
             ProtocolMessage::PaintResult { drawing_id, status } => {
@@ -538,14 +590,14 @@ impl WsActor {
             }
 
             ProtocolMessage::PaintEvent { pos, color } => {
-                let _ = EventBus::global()
-                    .send(Event::other_paint_event(pos, color));
+                let _ = EventBus::global().send(Event::other_paint_event(pos, color));
             }
 
             ProtocolMessage::Unknown { opcode, data } => {
                 warn!(
                     "收到未知消息类型: opcode=0x{:02x}, 数据长度: {} 字节",
-                    opcode, data.len()
+                    opcode,
+                    data.len()
                 );
             }
 
@@ -651,16 +703,18 @@ impl AsyncWsProvider {
     /// Connect to the WebSocket server
     pub async fn connect(&self) -> Result<(), PaintboardError> {
         debug!("开始连接到 WebSocket 服务器: {}", self.config.ws_url);
-        
+
         let (response_tx, response_rx) = oneshot::channel();
         let message = WsActorMessage::Connection(ConnectionRequest::Connect(response_tx));
-        
-        self.sender.send(message)
+
+        self.sender
+            .send(message)
             .map_err(|_| PaintboardError::Internal("Actor channel closed".to_string()))?;
-        
-        let result = response_rx.await
+
+        let result = response_rx
+            .await
             .map_err(|_| PaintboardError::Internal("Actor response channel closed".to_string()))?;
-        
+
         if result.is_ok() {
             // 等待后台消息处理任务真正启动
             debug!("等待后台消息处理任务启动...");
@@ -669,7 +723,7 @@ impl AsyncWsProvider {
                 .map_err(|_| PaintboardError::timeout())?;
             debug!("后台消息处理任务已启动");
         }
-        
+
         result
     }
 
@@ -677,9 +731,9 @@ impl AsyncWsProvider {
     pub async fn is_connected(&self) -> bool {
         let (response_tx, response_rx) = oneshot::channel();
         let message = WsActorMessage::Connection(ConnectionRequest::IsConnected(response_tx));
-        
+
         let _ = self.sender.send(message);
-        
+
         match tokio::time::timeout(Duration::from_millis(100), response_rx).await {
             Ok(Ok(result)) => result,
             _ => false,
@@ -689,16 +743,19 @@ impl AsyncWsProvider {
     /// Send binary data through the WebSocket connection
     async fn send_binary(&self, data: Vec<u8>) -> Result<(), Report> {
         let (response_tx, response_rx) = oneshot::channel();
-        let message = WsActorMessage::Send(SendRequest::SendBinary {
-            data,
-            response_tx,
-        });
-        
-        self.sender.send(message)
-            .map_err(|_| Report::new(PaintboardError::Internal("Actor channel closed".to_string())))?;
-        
-        response_rx.await
-            .map_err(|_| Report::new(PaintboardError::Internal("Actor response channel closed".to_string())))?
+        let message = WsActorMessage::Send(SendRequest::SendBinary { data, response_tx });
+
+        self.sender.send(message).map_err(|_| {
+            Report::new(PaintboardError::Internal(
+                "Actor channel closed".to_string(),
+            ))
+        })?;
+
+        response_rx.await.map_err(|_| {
+            Report::new(PaintboardError::Internal(
+                "Actor response channel closed".to_string(),
+            ))
+        })?
     }
 
     /// 延迟绘画
@@ -956,10 +1013,11 @@ impl AsyncWsProvider {
 
         let (response_tx, response_rx) = oneshot::channel();
         let message = WsActorMessage::Connection(ConnectionRequest::Close(response_tx));
-        
+
         let _ = self.sender.send(message);
-        
-        response_rx.await
+
+        response_rx
+            .await
             .map_err(|_| PaintboardError::Internal("Actor response channel closed".to_string()))?
     }
 
@@ -977,6 +1035,10 @@ impl Drop for AsyncWsProvider {
     fn drop(&mut self) {
         // 当 AsyncWsProvider 被丢弃时，向 Actor 发送关闭信号
         let (response_tx, _) = oneshot::channel();
-        let _ = self.sender.send(WsActorMessage::Control(ControlRequest::Shutdown(response_tx)));
+        let _ = self
+            .sender
+            .send(WsActorMessage::Control(ControlRequest::Shutdown(
+                response_tx,
+            )));
     }
 }
