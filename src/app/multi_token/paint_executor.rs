@@ -138,10 +138,11 @@ impl PaintExecutor {
                             );
 
                             info!(
-                                "成功在 ({}, {}) 使用 Token {} 绘制像素",
+                                "成功在 ({}, {}) 使用 Token {} 绘制像素（优先级 {}）",
                                 request.pixel.pos.x,
                                 request.pixel.pos.y,
-                                request.token_lease.uid()
+                                request.token_lease.uid(),
+                                request.pixel.priority
                             );
                         }
 

@@ -1,4 +1,5 @@
-use image::{imageops::FilterType, open, RgbaImage, GrayImage};
+use color_eyre::Report;
+use image::{imageops::FilterType, open, GrayImage, RgbaImage};
 use imageproc::edges::canny;
 use log::{debug, info};
 use rustc_hash::FxHashMap;
@@ -92,7 +93,8 @@ pub fn process_image_at_all_scales(
     }
 
     // Apply Canny edge detection to the original image
-    let pixel_canny_priorities = apply_canny_edge_detection(&original_rgba, canny_low_thresh, canny_high_thresh);
+    let pixel_canny_priorities =
+        apply_canny_edge_detection(&original_rgba, canny_low_thresh, canny_high_thresh);
 
     info!("图片预处理完成！原图尺寸: {}x{}", img_width, img_height);
 
@@ -168,6 +170,10 @@ pub fn apply_canny_edge_detection(
 
     let mut canny_map = FxHashMap::default();
 
+    let _ = edge_img
+        .save("./canny.png")
+        .map_err(|e| tracing::error!("{}", Report::new(e).wrap_err("保存 Canny 处理结果失败")));
+
     // Iterate over the edge-detected image to extract edge strengths
     for (x, y, pixel) in edge_img.enumerate_pixels() {
         // The pixel value from the canny output represents the edge strength (0 for non-edge, >0 for edge)
@@ -176,6 +182,7 @@ pub fn apply_canny_edge_detection(
             // Create position, handling potential errors from Pos::new
             if let Ok(pos) = winter_paintboard_sdk::Pos::new(x as u16, y as u16) {
                 canny_map.insert(pos, edge_strength);
+                // println!("Canny edge at ({}, {}) with strength {}", x, y, edge_strength);
             }
         }
     }

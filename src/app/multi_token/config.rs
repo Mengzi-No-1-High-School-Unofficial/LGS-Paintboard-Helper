@@ -83,7 +83,8 @@ impl Eq for PriorityPixel {}
 impl PartialOrd for PriorityPixel {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         // 优先级高的排在前面（大顶堆）
-        other.priority.partial_cmp(&self.priority)
+        // other.priority.partial_cmp(&self.priority)
+        self.priority.partial_cmp(&other.priority)
     }
 }
 

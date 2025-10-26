@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::{interval, sleep};
+use winter_paintboard_sdk::Pos;
 
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
@@ -55,7 +56,8 @@ impl MultiTokenService {
             comparison_interval,
             20.0, // 默认低阈值
             40.0, // 默认高阈值
-        ).await
+        )
+        .await
     }
 
     /// 创建新的多 Token 服务，支持配置 Canny 边缘检测阈值
@@ -88,7 +90,7 @@ impl MultiTokenService {
         let stop_signal_clone = Arc::new(AtomicBool::new(false));
         let metrics_handle = {
             let stop_signal = stop_signal_clone.clone();
-            
+
             tokio::spawn(async move {
                 Self::print_metrics_loop(token_manager_clone, stop_signal).await;
             })
@@ -245,6 +247,15 @@ impl MultiTokenService {
                 let relative_x = x - start_x;
                 let relative_y = y - start_y;
 
+                let relative_pos = Pos::new(relative_x as u16, relative_y as u16);
+
+                if let Err(e) = relative_pos {
+                    error!("{}", Report::new(e).wrap_err("无法计算对于图片的相对位置"));
+                    continue;
+                }
+
+                let relative_pos = relative_pos.unwrap();
+
                 if relative_x >= 0
                     && relative_y >= 0
                     && relative_x < target_image.img_width as i32
@@ -253,7 +264,7 @@ impl MultiTokenService {
                     let priority = if let Some(current_pixel) = local_pixels.get(pos) {
                         if current_pixel.color != *target_color {
                             // 使用 Canny 优先级，如果该像素是边缘，则使用其边缘强度，否则使用一个较低的默认值
-                            *target_image.pixel_canny_priorities.get(pos).unwrap_or(&0.0)
+                            *target_image.pixel_canny_priorities.get(&relative_pos).unwrap_or(&0.0)
                         } else {
                             continue; // 颜色一致，跳过
                         }
@@ -307,9 +318,9 @@ impl MultiTokenService {
     }
 
     /// 将 [`TokenConfig`] 中的所有 [`TokenEntry`] 解析为 [`TokenInfo`] 列表
-    /// 
+    ///
     /// # Note
-    /// 
+    ///
     /// 不应为该函数增加异步并行操作，否则会触发 429 Rate Limit 错误
     async fn fetch_tokens(token_config: &TokenConfig) -> Result<Vec<TokenInfo>, Report> {
         let mut tokens = Vec::new();
@@ -329,10 +340,7 @@ impl MultiTokenService {
         Ok(tokens)
     }
 
-    async fn print_metrics_loop(
-        token_manager: Arc<TokenManager>,
-        stop_signal: Arc<AtomicBool>,
-    ) {
+    async fn print_metrics_loop(token_manager: Arc<TokenManager>, stop_signal: Arc<AtomicBool>) {
         use crate::app::metrics::Metrics;
 
         let mut interval_timer = interval(Duration::from_secs(60));
@@ -343,7 +351,7 @@ impl MultiTokenService {
             }
 
             interval_timer.tick().await;
-            
+
             let metrics = Metrics::get_instance();
 
             if let Err(e) = metrics {
@@ -356,7 +364,10 @@ impl MultiTokenService {
 
             info!("=== 全局绘制指标 ===");
             info!("总绘制像素数: {}", metrics.global.total_painted_pixels);
-            info!("成功绘制像素数: {}", metrics.global.successful_painted_pixels);
+            info!(
+                "成功绘制像素数: {}",
+                metrics.global.successful_painted_pixels
+            );
             info!("失败绘制像素数: {}", metrics.global.failed_painted_pixels);
             info!("===================");
 
@@ -368,9 +379,15 @@ impl MultiTokenService {
                     let token_metrics = token_metrics.read().await;
                     info!("--- Token UID: {} 指标 ---", uid);
                     info!("总绘制像素数: {}", token_metrics.painted_pixels);
-                    info!("成功绘制像素数: {}", token_metrics.successful_painted_pixels);
+                    info!(
+                        "成功绘制像素数: {}",
+                        token_metrics.successful_painted_pixels
+                    );
                     info!("失败绘制像素数: {}", token_metrics.failed_painted_pixels);
-                    info!("绘制速率 (像素/分钟): {:.2}", token_metrics.get_recent_paint_rate());
+                    info!(
+                        "绘制速率 (像素/分钟): {:.2}",
+                        token_metrics.get_recent_paint_rate()
+                    );
                     info!("-------------------------");
                 } else {
                     info!("Token UID: {} 无指标数据", uid);
