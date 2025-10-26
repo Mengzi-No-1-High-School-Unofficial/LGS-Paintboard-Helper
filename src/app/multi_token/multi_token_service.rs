@@ -14,7 +14,7 @@ use crate::app::multi_token::paint_executor::{PaintExecutor, PaintRequestQueue};
 use crate::app::multi_token::pixel_queue::PixelQueue;
 use crate::app::multi_token::token_manager::{TokenInfo, TokenManager};
 use crate::app::multi_token::token_worker::TokenWorker;
-use crate::app::utils::{calculate_color_difference, get_token_with_access_key};
+use crate::app::utils::get_token_with_access_key;
 use winter_paintboard_sdk::{basic_client::AsyncClient, config::Config, PaintboardClientTrait};
 
 /// 多 Token 绘制服务
@@ -44,6 +44,31 @@ impl MultiTokenService {
         start_x: i32,
         start_y: i32,
         comparison_interval: Duration,
+    ) -> Result<Self, Report> {
+        Self::with_canny_thresholds(
+            token_config,
+            ws_url,
+            local_board,
+            target_image,
+            start_x,
+            start_y,
+            comparison_interval,
+            20.0, // 默认低阈值
+            40.0, // 默认高阈值
+        ).await
+    }
+
+    /// 创建新的多 Token 服务，支持配置 Canny 边缘检测阈值
+    pub async fn with_canny_thresholds(
+        token_config: TokenConfig,
+        ws_url: Option<String>,
+        local_board: Arc<RwLock<LocalBoard>>,
+        target_image: ProcessedImageData,
+        start_x: i32,
+        start_y: i32,
+        comparison_interval: Duration,
+        canny_low_thresh: f32,
+        canny_high_thresh: f32,
     ) -> Result<Self, Report> {
         // 解析所有 Token（将 access_key 转换为 token）
         let tokens = Self::fetch_tokens(&token_config).await?;
@@ -225,9 +250,10 @@ impl MultiTokenService {
                     && relative_x < target_image.img_width as i32
                     && relative_y < target_image.img_height as i32
                 {
-                    let color_diff = if let Some(current_pixel) = local_pixels.get(pos) {
+                    let priority = if let Some(current_pixel) = local_pixels.get(pos) {
                         if current_pixel.color != *target_color {
-                            calculate_color_difference(&current_pixel.color, target_color)
+                            // 使用 Canny 优先级，如果该像素是边缘，则使用其边缘强度，否则使用一个较低的默认值
+                            *target_image.pixel_canny_priorities.get(pos).unwrap_or(&0.0)
                         } else {
                             continue; // 颜色一致，跳过
                         }
@@ -238,7 +264,7 @@ impl MultiTokenService {
                     differences.push(PriorityPixel {
                         pos: *pos,
                         color: *target_color,
-                        priority: color_diff,
+                        priority,
                     });
                 }
             }

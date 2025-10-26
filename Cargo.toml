@@ -15,6 +15,7 @@ members = [
 [dependencies]
 clap = { workspace = true }
 image = { workspace = true }
+imageproc = { version = "0.23" }
 tokio = { workspace = true, features = ["tracing"] }
 winter-paintboard-sdk = { workspace = true }
 log = { workspace = true }

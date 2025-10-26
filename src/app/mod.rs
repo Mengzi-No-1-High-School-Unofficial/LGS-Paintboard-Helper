@@ -53,6 +53,8 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             enable_heatmap_export,
             export_dir,
             export_interval,
+            canny_low_thresh,
+            canny_high_thresh,
         } => {
             // 多 Token 模式
             run_multi_token_mode(
@@ -69,6 +71,8 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 enable_heatmap_export,
                 export_dir,
                 export_interval,
+                canny_low_thresh,
+                canny_high_thresh,
             )
             .await
         }
@@ -90,6 +94,8 @@ pub async fn run_multi_token_mode(
     enable_heatmap_export: bool,
     export_dir: String,
     export_interval: u64,
+    canny_low_thresh: f32,
+    canny_high_thresh: f32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::app::board_sync::BoardSyncManager;
     use crate::app::image_processing::process_image_at_all_scales;
@@ -158,10 +164,10 @@ pub async fn run_multi_token_mode(
 
     // 处理图片
     info!("正在预处理图片数据...");
-    let processed_image_data = process_image_at_all_scales(&image, width, height, x, y)?;
+    let processed_image_data = process_image_at_all_scales(&image, width, height, x, y, canny_low_thresh, canny_high_thresh)?;
 
     // 创建并启动多 Token 服务
-    let mut service = MultiTokenService::new(
+    let mut service = MultiTokenService::with_canny_thresholds(
         token_config,
         ws_url,
         sync_manager.local_board(),
@@ -169,6 +175,8 @@ pub async fn run_multi_token_mode(
         x,
         y,
         tokio::time::Duration::from_millis(comparison_interval),
+        canny_low_thresh,
+        canny_high_thresh,
     )
     .await?;
 

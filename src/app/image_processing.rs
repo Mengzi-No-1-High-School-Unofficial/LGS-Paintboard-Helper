@@ -1,5 +1,7 @@
-use image::{imageops::FilterType, open, RgbaImage};
+use image::{imageops::FilterType, open, RgbaImage, GrayImage};
+use imageproc::edges::canny;
 use log::{debug, info};
+use rustc_hash::FxHashMap;
 
 /// Represents processed image data for different scale factors
 #[derive(Clone)]
@@ -8,6 +10,8 @@ pub struct ProcessedImageData {
     pub img_height: u32,
     pub full_scale_operations: Vec<(winter_paintboard_sdk::Pos, winter_paintboard_sdk::Rgb)>,
     pub scale_level_operations: Vec<Vec<(winter_paintboard_sdk::Pos, winter_paintboard_sdk::Rgb)>>,
+    /// Canny 边缘检测计算出的像素优先级 (边缘高优先级)
+    pub pixel_canny_priorities: FxHashMap<winter_paintboard_sdk::Pos, f64>,
 }
 
 /// Reads and resizes an image from the given path
@@ -44,6 +48,8 @@ pub fn process_image_at_all_scales(
     height: Option<u32>,
     start_x: i32,
     start_y: i32,
+    canny_low_thresh: f32,
+    canny_high_thresh: f32,
 ) -> Result<ProcessedImageData, Box<dyn std::error::Error>> {
     info!("正在读取并预处理图片: {:?}", image_path);
     let original_rgba = read_and_resize_image(image_path, width, height)?;
@@ -85,6 +91,9 @@ pub fn process_image_at_all_scales(
         scale_level_operations.push(level_operations);
     }
 
+    // Apply Canny edge detection to the original image
+    let pixel_canny_priorities = apply_canny_edge_detection(&original_rgba, canny_low_thresh, canny_high_thresh);
+
     info!("图片预处理完成！原图尺寸: {}x{}", img_width, img_height);
 
     Ok(ProcessedImageData {
@@ -92,6 +101,7 @@ pub fn process_image_at_all_scales(
         img_height,
         full_scale_operations,
         scale_level_operations,
+        pixel_canny_priorities,
     })
 }
 
@@ -132,4 +142,43 @@ fn prepare_draw_operations_with_coords(
     }
 
     Ok(draw_operations)
+}
+
+/// Applies Canny edge detection to an image and returns a map of pixel positions to their edge strength (priority).
+///
+/// # Arguments
+///
+/// * `rgba_img` - The input RGBA image.
+/// * `low_thresh` - The low threshold for the hysteresis procedure in Canny.
+/// * `high_thresh` - The high threshold for the hysteresis procedure in Canny.
+///
+/// # Returns
+///
+/// A `FxHashMap` where keys are `winter_paintboard_sdk::Pos` and values are `f64` representing the edge strength.
+pub fn apply_canny_edge_detection(
+    rgba_img: &RgbaImage,
+    low_thresh: f32,
+    high_thresh: f32,
+) -> FxHashMap<winter_paintboard_sdk::Pos, f64> {
+    // Convert RGBA image to grayscale
+    let gray_img: GrayImage = image::imageops::colorops::grayscale(rgba_img);
+
+    // Apply Canny edge detection
+    let edge_img = canny(&gray_img, low_thresh, high_thresh);
+
+    let mut canny_map = FxHashMap::default();
+
+    // Iterate over the edge-detected image to extract edge strengths
+    for (x, y, pixel) in edge_img.enumerate_pixels() {
+        // The pixel value from the canny output represents the edge strength (0 for non-edge, >0 for edge)
+        let edge_strength = pixel.0[0] as f64;
+        if edge_strength > 0.0 {
+            // Create position, handling potential errors from Pos::new
+            if let Ok(pos) = winter_paintboard_sdk::Pos::new(x as u16, y as u16) {
+                canny_map.insert(pos, edge_strength);
+            }
+        }
+    }
+
+    canny_map
 }

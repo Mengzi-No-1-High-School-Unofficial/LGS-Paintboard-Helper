@@ -69,7 +69,7 @@ impl TokenConfig {
 pub struct PriorityPixel {
     pub pos: winter_paintboard_sdk::models::Pos,
     pub color: winter_paintboard_sdk::models::Rgb,
-    pub priority: f64, // 颜色差异值，越大越优先
+    pub priority: f64, // Canny 边缘强度或颜色差异值，越大越优先
 }
 
 impl PartialEq for PriorityPixel {
