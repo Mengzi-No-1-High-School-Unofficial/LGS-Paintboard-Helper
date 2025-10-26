@@ -1,6 +1,7 @@
 use color_eyre::Report;
 use image::{imageops::FilterType, open, GrayImage, RgbaImage};
-use imageproc::edges::canny;
+use imageproc::edges::{self, canny};
+use imageproc::filter::gaussian_blur_f32;
 use log::{debug, info};
 use rustc_hash::FxHashMap;
 
@@ -167,6 +168,7 @@ pub fn apply_canny_edge_detection(
 
     // Apply Canny edge detection
     let edge_img = canny(&gray_img, low_thresh, high_thresh);
+    let edge_img = gaussian_blur_f32(&edge_img, 3.0);
 
     let mut canny_map = FxHashMap::default();
 

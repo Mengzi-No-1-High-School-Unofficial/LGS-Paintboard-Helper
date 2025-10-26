@@ -119,6 +119,10 @@ pub async fn run_multi_token_mode(
 
     let sync_client: Arc<dyn PaintboardClientTrait + Send + Sync> = get_global_client(sync_config).await?;
 
+    // 处理图片
+    info!("正在预处理图片数据...");
+    let processed_image_data = process_image_at_all_scales(&image, width, height, x, y, canny_low_thresh, canny_high_thresh)?;
+
     // 使用第一个 token 的认证信息
     if let Some(first_token) = token_config.tokens.first() {
         let token = match (&first_token.token, &first_token.access_key) {
@@ -161,10 +165,6 @@ pub async fn run_multi_token_mode(
         export_interval,
     )
     .await?;
-
-    // 处理图片
-    info!("正在预处理图片数据...");
-    let processed_image_data = process_image_at_all_scales(&image, width, height, x, y, canny_low_thresh, canny_high_thresh)?;
 
     // 创建并启动多 Token 服务
     let mut service = MultiTokenService::with_canny_thresholds(
