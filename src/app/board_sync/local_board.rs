@@ -4,7 +4,9 @@ use rustc_hash::FxHashMap;
 use tokio::{sync::RwLock, time::sleep};
 use winter_paintboard_sdk::models::{Board, Pos, Rgb};
 
-const HEATMAP_EXPIRE_DURATION_MILLS: u64 = 60 * 60 * 1000; // 1hrs
+use crate::app::multi_token::cli::get_penalty_scale;
+
+const HEATMAP_EXPIRE_DURATION_MILLS: u64 = 10 * 60 * 1000; // 10min
 
 // 像素状态，区分来源和时间戳
 #[repr(u8)]
@@ -80,7 +82,7 @@ impl LocalBoard {
                     *heatmap.entry(pos.clone()).or_insert(0) += 1;
                 }
 
-                // 一小时后减少热力图计数
+                // 10min 后减少热力图计数
                 sleep(Duration::from_millis(HEATMAP_EXPIRE_DURATION_MILLS)).await;
 
                 {
@@ -222,6 +224,16 @@ impl LocalBoard {
 
         self.is_initialized = true;
         self.last_sync_time = Some(std::time::SystemTime::now());
+    }
+
+    /// 获取惩罚优先级，为正数，应与其他优先级相减
+    pub async fn get_penalty_priority(&self, pos: &Pos) -> Option<f32> {
+        Some(
+            *std::cmp::max(
+                self.get_heatmap().read().await.get(pos).unwrap_or(&0),
+                &20 // TODO: as const
+            ) as f32 * get_penalty_scale()
+        )
     }
 
     /// 检查数据完整性

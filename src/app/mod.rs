@@ -55,6 +55,7 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             export_interval,
             canny_low_thresh,
             canny_high_thresh,
+            penalty_scale
         } => {
             // 多 Token 模式
             run_multi_token_mode(
@@ -73,6 +74,7 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 export_interval,
                 canny_low_thresh,
                 canny_high_thresh,
+                penalty_scale
             )
             .await
         }
@@ -96,6 +98,7 @@ pub async fn run_multi_token_mode(
     export_interval: u64,
     canny_low_thresh: f32,
     canny_high_thresh: f32,
+    penalty_scale: f32
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::app::board_sync::BoardSyncManager;
     use crate::app::image_processing::process_image_at_all_scales;
@@ -103,6 +106,12 @@ pub async fn run_multi_token_mode(
     use winter_paintboard_sdk::{config::Config, get_global_client, PaintboardClientTrait};
 
     info!("启动多 Token 绘制模式...");
+
+    let _ = multi_token::cli::PENALTY_SCALE.set(penalty_scale).map_err(|e| {
+        let e = color_eyre::Report::msg("无法设置值 PENALTY_SCALE");
+        error!("{}", e);
+        e
+    });
 
     // 加载配置
     let token_config = crate::app::multi_token::config::TokenConfig::from_file(&config_path)?;

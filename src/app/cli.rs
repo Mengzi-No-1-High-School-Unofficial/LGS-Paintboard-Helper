@@ -117,6 +117,10 @@ pub enum Commands {
         /// Canny 边缘检测高阈值
         #[arg(long, default_value_t = 40.0)]
         canny_high_thresh: f32,
+
+        /// 惩罚系数
+        #[arg(long, default_value_t = 60000.0)]
+        penalty_scale: f32,
     },
 }
 

@@ -272,6 +272,8 @@ impl MultiTokenService {
                         255.0 // 缺少像素，最高优先级
                     };
 
+                    let priority = priority - (local_board.read().await.get_penalty_priority(&pos).await.unwrap_or(0.0) as f64);
+
                     differences.push(PriorityPixel {
                         pos: *pos,
                         color: *target_color,
