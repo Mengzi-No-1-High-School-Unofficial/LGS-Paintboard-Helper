@@ -1,15 +1,17 @@
 use color_eyre::eyre::Ok;
 use color_eyre::Report;
 use log::{debug, error, info, warn};
-use std::sync::atomic::{AtomicBool, Ordering};
+use rustc_hash::FxHashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tokio::time::{interval, sleep};
+use tokio::time::{interval, sleep, Instant};
 use winter_paintboard_sdk::Pos;
 
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
+use crate::app::multi_token::cli::get_penalty_scale;
 use crate::app::multi_token::config::{PriorityPixel, TokenConfig, TokenEntry};
 use crate::app::multi_token::paint_executor::{PaintExecutor, PaintRequestQueue};
 use crate::app::multi_token::pixel_queue::PixelQueue;
@@ -26,6 +28,8 @@ pub struct MultiTokenService {
     metrics_handle: Option<tokio::task::JoinHandle<()>>,
     pixel_queue: Arc<PixelQueue>,
     local_board: Arc<RwLock<LocalBoard>>,
+    local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
+    local_paint_total: Arc<AtomicU64>,
     target_image: ProcessedImageData,
     start_x: i32,
     start_y: i32,
@@ -102,6 +106,8 @@ impl MultiTokenService {
             comparison_handle: None,
             metrics_handle: Some(metrics_handle),
             pixel_queue: Arc::new(PixelQueue::new()),
+            local_paint_history: Arc::new(RwLock::new(FxHashMap::default())),
+            local_paint_total: Arc::new(AtomicU64::new(0)),
             local_board,
             target_image,
             start_x,
@@ -128,6 +134,8 @@ impl MultiTokenService {
             self.shared_client.clone(),
             paint_request_queue.clone(),
             self.local_board.clone(),
+            self.local_paint_history.clone(),
+            self.local_paint_total.clone(),
         );
 
         let stop_signal = self.stop_signal.clone();
@@ -162,6 +170,8 @@ impl MultiTokenService {
         let start_y = self.start_y;
         let interval_duration = self.comparison_interval;
         let stop_signal = self.stop_signal.clone();
+        let local_paint_history = self.local_paint_history.clone();
+        let local_paint_total = self.local_paint_total.clone();
 
         let comparison_handle = tokio::spawn(async move {
             Self::run_comparison_loop(
@@ -172,6 +182,8 @@ impl MultiTokenService {
                 start_y,
                 interval_duration,
                 stop_signal,
+                local_paint_history,
+                local_paint_total,
             )
             .await;
         });
@@ -216,6 +228,8 @@ impl MultiTokenService {
         start_y: i32,
         interval_duration: Duration,
         stop_signal: Arc<AtomicBool>,
+        local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
+        local_paint_total: Arc<AtomicU64>,
     ) {
         let mut interval_timer = interval(interval_duration);
 
@@ -264,7 +278,10 @@ impl MultiTokenService {
                     let priority = if let Some(current_pixel) = local_pixels.get(pos) {
                         if current_pixel.color != *target_color {
                             // 使用 Canny 优先级，如果该像素是边缘，则使用其边缘强度，否则使用一个较低的默认值
-                            *target_image.pixel_canny_priorities.get(&relative_pos).unwrap_or(&0.0)
+                            *target_image
+                                .pixel_canny_priorities
+                                .get(&relative_pos)
+                                .unwrap_or(&0.0)
                         } else {
                             continue; // 颜色一致，跳过
                         }
@@ -272,7 +289,7 @@ impl MultiTokenService {
                         255.0 // 缺少像素，最高优先级
                     };
 
-                    let priority = priority - (local_board.read().await.get_penalty_priority(&pos).await.unwrap_or(0.0) as f64);
+                    let priority = priority - Self::get_penalty_priority(pos, local_paint_history.clone(), local_paint_total.clone()).await;
 
                     differences.push(PriorityPixel {
                         pos: *pos,
@@ -395,6 +412,73 @@ impl MultiTokenService {
                     info!("Token UID: {} 无指标数据", uid);
                 }
             }
+        }
+    }
+
+    /// 获取像素位置的惩罚优先级，为正数，与 Canny 优先级相减
+    ///
+    /// 根据 10 分钟内的绘画频率计算
+    /// 
+    /// $$
+    /// P_{i,j} = C_{i,j} - \frac{R_{i,j}}{\max(\sum R, \text{最小总绘画数})} \times \text{惩罚系数}
+    /// $$
+
+    /// 其中 P 表示某一像素的优先级，R 为该像素 10 分钟内被绘制的次数，$\sum R$为 10 分钟内的总绘制数。
+    /// 
+    /// 其中，`最小总绘画数`、`惩罚系数`是常量，可被外部配置文件调整。
+    /// 含义为，根据该像素调用占比占所有绘制调用的占比和 Canny 算法值决定优先级
+    pub async fn get_penalty_priority(
+        pos: &Pos,
+        local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
+        local_paint_total: Arc<AtomicU64>,
+    ) -> f64 {
+        let local_paint_history = local_paint_history.read().await;
+        let histories = local_paint_history.get(pos);
+
+        if histories.is_none() {
+            return 0.0;
+        }
+
+        let histories = histories.unwrap();
+        let histories = histories
+            .iter()
+            .filter(|x| x.elapsed() < Duration::from_secs(600))
+            .count();
+
+        let total = std::cmp::max(local_paint_total.load(Ordering::Acquire), 500 as u64);
+
+        let penalty = (histories as f64) / (total as f64) * get_penalty_scale() as f64;
+
+        penalty
+    }
+
+    pub async fn record_local_paint(
+        pos: &Pos,
+        local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
+        local_paint_total: Arc<AtomicU64>,
+    ) {
+        {
+            let mut local_paint_history = local_paint_history.write().await;
+            let histories = local_paint_history.entry(*pos).or_insert_with(Vec::new);
+            histories.push(Instant::now());
+        }
+
+        local_paint_total.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub async fn remove_old_paint_histories(
+        local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
+        local_paint_total: Arc<AtomicU64>,
+    ) {
+        let mut local_paint_history = local_paint_history.write().await;
+
+        for (_pos, histories) in local_paint_history.iter_mut() {
+            let count_before = histories.len();
+            histories.retain(|t| t.elapsed() < Duration::from_secs(600));
+            let count_after = histories.len();
+            let removed = count_before - count_after;
+
+            local_paint_total.fetch_sub(removed as u64, Ordering::AcqRel);
         }
     }
 }

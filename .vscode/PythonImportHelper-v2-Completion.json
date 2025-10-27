@@ -1,0 +1,142 @@
+[
+    {
+        "label": "pandas",
+        "kind": 6,
+        "isExtraImport": true,
+        "importPath": "pandas",
+        "description": "pandas",
+        "detail": "pandas",
+        "documentation": {}
+    },
+    {
+        "label": "json",
+        "kind": 6,
+        "isExtraImport": true,
+        "importPath": "json",
+        "description": "json",
+        "detail": "json",
+        "documentation": {}
+    },
+    {
+        "label": "requests",
+        "importPath": "curl_cffi",
+        "description": "curl_cffi",
+        "isExtraImport": true,
+        "detail": "curl_cffi",
+        "documentation": {}
+    },
+    {
+        "label": "Path",
+        "importPath": "pathlib",
+        "description": "pathlib",
+        "isExtraImport": true,
+        "detail": "pathlib",
+        "documentation": {}
+    },
+    {
+        "label": "threading",
+        "kind": 6,
+        "isExtraImport": true,
+        "importPath": "threading",
+        "description": "threading",
+        "detail": "threading",
+        "documentation": {}
+    },
+    {
+        "label": "time",
+        "kind": 6,
+        "isExtraImport": true,
+        "importPath": "time",
+        "description": "time",
+        "detail": "time",
+        "documentation": {}
+    },
+    {
+        "label": "ThreadPoolExecutor",
+        "importPath": "concurrent.futures",
+        "description": "concurrent.futures",
+        "isExtraImport": true,
+        "detail": "concurrent.futures",
+        "documentation": {}
+    },
+    {
+        "label": "as_completed",
+        "importPath": "concurrent.futures",
+        "description": "concurrent.futures",
+        "isExtraImport": true,
+        "detail": "concurrent.futures",
+        "documentation": {}
+    },
+    {
+        "label": "df",
+        "kind": 5,
+        "importPath": "tools.exports",
+        "description": "tools.exports",
+        "peekOfCode": "df = pd.read_csv(\"tokens.csv\")\nresults: list[dict[str, str | int]] = []\nfor idx, row in df.iterrows():\n    if row['UID'] is None or not isinstance(row['AccessKey'], str):\n        continue\n    result = {\n        'uid': row['UID'],\n        # 'access_key': row['AccessKey'],\n        'token': row['PaintKey']\n    }",
+        "detail": "tools.exports",
+        "documentation": {}
+    },
+    {
+        "label": "login_lgs",
+        "kind": 2,
+        "importPath": "tools.get_token",
+        "description": "tools.get_token",
+        "peekOfCode": "def login_lgs(uid: int, token: str) -> str:\n    url = \"https://www.luogu.me/user/login\"\n    payload = {\n        \"token\": token\n    }\n    try:\n        response = requests.post(url, data=payload, headers={\"User-Agent\": USER_AGENT}, cookies={\"cf_clearance\": CF_CLEARANCE}, impersonate='chrome110')\n        if response.status_code == 200:\n            new_token = response.cookies.get(\"token\")\n            if new_token:",
+        "detail": "tools.get_token",
+        "documentation": {}
+    },
+    {
+        "label": "get_accesskey",
+        "kind": 2,
+        "importPath": "tools.get_token",
+        "description": "tools.get_token",
+        "peekOfCode": "def get_accesskey(uid: int, login_token: str) -> str:\n    url = \"https://www.luogu.me/paintboard/apply\"\n    cookies = {\n        'token': login_token,\n        'cf_clearance': CF_CLEARANCE\n    }\n    try:\n        response = requests.post(url, cookies=cookies, headers={\"User-Agent\": USER_AGENT}, impersonate='chrome110')\n        if response.status_code == 200:\n            data = response.json()",
+        "detail": "tools.get_token",
+        "documentation": {}
+    },
+    {
+        "label": "get_token",
+        "kind": 2,
+        "importPath": "tools.get_token",
+        "description": "tools.get_token",
+        "peekOfCode": "def get_token(uid: int, accesskey: str) -> str:\n    url = \"https://paintboard.luogu.me/api/auth/gettoken\"\n    try:\n        response = requests.post(url, json={\"access_key\": accesskey, 'uid': uid})\n        data = response.json()\n        if data['data'].get(\"errorType\", None):\n            raise Exception(f\"Error getting token: {data}\")\n        return data['data']['token']\n    except Exception as e:\n        print(f\"Error getting token for UID {uid}: {str(e)}\")",
+        "detail": "tools.get_token",
+        "documentation": {}
+    },
+    {
+        "label": "process_row",
+        "kind": 2,
+        "importPath": "tools.get_token",
+        "description": "tools.get_token",
+        "peekOfCode": "def process_row(index, row):\n    \"\"\"处理单行数据并返回结果\"\"\"\n    print(f\"Getting token for user: {row['UID']}\")\n    try:\n        login_token = login_lgs(int(row['UID']), row['保存站 Token'])\n        accesskey = get_accesskey(int(row['UID']), login_token)\n        print(f\"UID: {row['UID']}, Accesskey: {accesskey[0:8]}...\")\n        token = get_token(int(row['UID']), accesskey)\n        print(f\"UID: {row['UID']}, Token: {token[0:8]}...\\n\")\n        # 返回处理结果",
+        "detail": "tools.get_token",
+        "documentation": {}
+    },
+    {
+        "label": "main",
+        "kind": 2,
+        "importPath": "tools.get_token",
+        "description": "tools.get_token",
+        "peekOfCode": "def main():\n    df = pd.read_csv(\"tokens.csv\")\n    print(f\"Processing {len(df)} rows in tokens.csv\")\n    print(\"Starting token retrieval process...\")\n    # 先统计需要处理的行数\n    rows_to_process = []\n    for index in df.index:\n        row = df.loc[index]\n        # 检查是否已经有PaintKey，如果没有则加入处理列表\n        if pd.isna(row['PaintKey']) or row['PaintKey'] == '':",
+        "detail": "tools.get_token",
+        "documentation": {}
+    },
+    {
+        "label": "USER_AGENT",
+        "kind": 5,
+        "importPath": "tools.get_token",
+        "description": "tools.get_token",
+        "peekOfCode": "USER_AGENT = \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0\";\nCF_CLEARANCE = \"vC0hw8NAzJI3DEP85XM0P9f64lEOPlSh1GAZZqxLB6Q-1761403850-1.2.1.1-oFYOrS9bcAxx6vttbK6WZ_X9yg9ohGic4eDX2a6.XI3KoMUAHy7urowJwRo8IQiSSB3HREQcu7gVoAgFIE5CQqqlZ56zmda4mNec_FSbtX45votkRhV7eBW3mERDfhC_4Nb2U7vBYFSKdM1bDztplNtl19x0KSGlBEejpSrs28o_4hY8.hl2Iskr2Jhqx3pPEIlRFXwbZfN2K7rpFAy5hPpvjnryphjxpl3klbs9gCI\"\ndef login_lgs(uid: int, token: str) -> str:\n    url = \"https://www.luogu.me/user/login\"\n    payload = {\n        \"token\": token\n    }\n    try:\n        response = requests.post(url, data=payload, headers={\"User-Agent\": USER_AGENT}, cookies={\"cf_clearance\": CF_CLEARANCE}, impersonate='chrome110')\n        if response.status_code == 200:",
+        "detail": "tools.get_token",
+        "documentation": {}
+    },
+    {
+        "label": "CF_CLEARANCE",
+        "kind": 5,
+        "importPath": "tools.get_token",
+        "description": "tools.get_token",
+        "peekOfCode": "CF_CLEARANCE = \"vC0hw8NAzJI3DEP85XM0P9f64lEOPlSh1GAZZqxLB6Q-1761403850-1.2.1.1-oFYOrS9bcAxx6vttbK6WZ_X9yg9ohGic4eDX2a6.XI3KoMUAHy7urowJwRo8IQiSSB3HREQcu7gVoAgFIE5CQqqlZ56zmda4mNec_FSbtX45votkRhV7eBW3mERDfhC_4Nb2U7vBYFSKdM1bDztplNtl19x0KSGlBEejpSrs28o_4hY8.hl2Iskr2Jhqx3pPEIlRFXwbZfN2K7rpFAy5hPpvjnryphjxpl3klbs9gCI\"\ndef login_lgs(uid: int, token: str) -> str:\n    url = \"https://www.luogu.me/user/login\"\n    payload = {\n        \"token\": token\n    }\n    try:\n        response = requests.post(url, data=payload, headers={\"User-Agent\": USER_AGENT}, cookies={\"cf_clearance\": CF_CLEARANCE}, impersonate='chrome110')\n        if response.status_code == 200:\n            new_token = response.cookies.get(\"token\")",
+        "detail": "tools.get_token",
+        "documentation": {}
+    }
+]

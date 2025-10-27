@@ -1,15 +1,19 @@
 use clap::error;
 use color_eyre::Report;
 use log::{debug, error, info, warn};
-use std::sync::atomic::{AtomicBool, Ordering};
+use rustc_hash::FxHashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
+use tokio::time::Instant;
+use winter_paintboard_sdk::Pos;
 
 use super::paint_request::PaintRequest;
 use crate::app::board_sync::local_board::{LocalBoard, PixelSource};
 use crate::app::metrics::Metrics;
+use crate::app::multi_token::multi_token_service::MultiTokenService;
 use winter_paintboard_sdk::{
     basic_client::AsyncClient, models::PaintStatus, PaintboardClientTrait,
 };
@@ -47,6 +51,8 @@ pub struct PaintExecutor {
     client: Arc<AsyncClient>,
     request_queue: Arc<PaintRequestQueue>,
     local_board: Arc<RwLock<LocalBoard>>,
+    local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
+    local_paint_total: Arc<AtomicU64>,
 }
 
 impl PaintExecutor {
@@ -54,11 +60,15 @@ impl PaintExecutor {
         client: Arc<AsyncClient>,
         request_queue: Arc<PaintRequestQueue>,
         local_board: Arc<RwLock<LocalBoard>>,
+        local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
+        local_paint_total: Arc<AtomicU64>,
     ) -> Self {
         Self {
             client,
             request_queue,
             local_board,
+            local_paint_history,
+            local_paint_total,
         }
     }
 
@@ -104,7 +114,7 @@ impl PaintExecutor {
                 request.pixel.pos,
                 request.pixel.color,
                 request.token_lease.uid(),
-                request.token_lease.token().to_string()
+                request.token_lease.token().to_string(),
             ),
         )
         .await;
@@ -147,6 +157,18 @@ impl PaintExecutor {
                         }
 
                         record_success_paint(&request).await;
+                        MultiTokenService::record_local_paint(
+                            &request.pixel.pos,
+                            self.local_paint_history.clone(),
+                            self.local_paint_total.clone(),
+                        )
+                        .await;
+
+                        MultiTokenService::remove_old_paint_histories(
+                            self.local_paint_history.clone(),
+                            self.local_paint_total.clone(),
+                        )
+                        .await;
 
                         // 标记成功，启动 CD
                         request.token_lease.mark_success();
