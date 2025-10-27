@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex, Notify, RwLock};
 use tokio::task::JoinHandle;
-use tokio::time::{interval, timeout, Duration, Instant};
+use tokio::time::{timeout, Duration, Instant};
 use tracing::{debug, error, trace, warn};
 
 use super::{
@@ -94,10 +94,14 @@ struct WsActor {
     send_pending_packets_by_limit_handle: Option<JoinHandle<()>>,
     /// 清理任务句柄
     cleanup_task_handle: Option<JoinHandle<()>>,
+    /// 健康检查任务句柄
+    health_check_task_handle: Option<JoinHandle<()>>,
     /// 连接是否健康
-    connected: bool,
+    connected: Arc<TokioMutex<bool>>,
     /// 上次发送数据包的时间
     last_send_time: Arc<TokioMutex<Instant>>,
+    /// 最后一次健康检查的时间
+    last_health_check: Arc<TokioMutex<Instant>>,
 }
 
 impl WsActor {
@@ -126,14 +130,18 @@ impl WsActor {
             send_pending_packets_by_duration_handle: None,
             send_pending_packets_by_limit_handle: None,
             cleanup_task_handle: None,
-            connected: false,
+            health_check_task_handle: None,
+            connected: Arc::new(TokioMutex::new(false)),
             last_send_time: Arc::new(TokioMutex::new(Instant::now())),
+            last_health_check: Arc::new(TokioMutex::new(Instant::now())),
         }
     }
 
     async fn run(&mut self) {
         // 启动清理任务
         self.start_cleanup_task().await;
+        // 启动健康检查任务
+        self.start_health_check_task().await;
 
         // 主循环：处理来自通道的消息和发送待处理数据包
         let mut duration_interval =
@@ -224,7 +232,8 @@ impl WsActor {
                 let _ = response_tx.send(result);
             }
             ConnectionRequest::IsConnected(response_tx) => {
-                let _ = response_tx.send(self.connected);
+                let connected = *self.connected.lock().await;
+                let _ = response_tx.send(connected);
             }
             ConnectionRequest::Close(response_tx) => {
                 let result = self.close_internal().await;
@@ -232,7 +241,7 @@ impl WsActor {
             }
             ConnectionRequest::MarkDisconnected => {
                 debug!("标记连接为断开");
-                self.connected = false;
+                *self.connected.lock().await = false;
                 self.ws_sender = None;
                 self.ws_receiver_stream = None;
                 // Optionally, trigger a reconnection attempt here if desired
@@ -291,7 +300,7 @@ impl WsActor {
                 let (sender, receiver) = ws_stream.split();
                 self.ws_sender = Some(sender);
                 self.ws_receiver_stream = Some(receiver);
-                self.connected = true;
+                *self.connected.lock().await = true;
 
                 // 发送连接打开事件到事件总线
                 let event_bus = EventBus::global();
@@ -317,7 +326,7 @@ impl WsActor {
     async fn send_binary_internal(&mut self, data: Vec<u8>) -> Result<(), Report> {
         debug!("尝试发送二进制消息，数据大小: {} 字节", data.len());
 
-        if !self.connected {
+        if !*self.connected.lock().await {
             return Err(
                 Report::new(PaintboardError::ConnectionClosed).wrap_err("无法发送消息，连接未建立")
             );
@@ -342,14 +351,14 @@ impl WsActor {
                     match e {
                         tokio_tungstenite::tungstenite::Error::ConnectionClosed => {
                             error!("检测到连接已关闭，清理连接状态");
-                            self.connected = false;
+                            *self.connected.lock().await = false;
                             self.ws_sender = None;
                             self.ws_receiver_stream = None;
                             self.connect_internal().await?;
                         }
                         tokio_tungstenite::tungstenite::Error::AlreadyClosed => {
                             error!("检测到连接已关闭，清理连接状态");
-                            self.connected = false;
+                            *self.connected.lock().await = false;
                             self.ws_sender = None;
                             self.ws_receiver_stream = None;
                             self.connect_internal().await?;
@@ -363,7 +372,7 @@ impl WsActor {
                 }
             }
         } else {
-            self.connected = false;
+            *self.connected.lock().await = false;
             Err(Report::new(PaintboardError::ConnectionClosed).wrap_err("WebSocket 发送端不存在"))
         }
     }
@@ -371,7 +380,7 @@ impl WsActor {
     async fn send_pong_internal(&mut self, payload: Vec<u8>) -> Result<(), Report> {
         debug!("尝试发送 Pong 消息，负载大小: {} 字节", payload.len());
 
-        if !self.connected {
+        if !*self.connected.lock().await {
             return Err(Report::new(PaintboardError::ConnectionClosed)
                 .wrap_err("无法发送 Pong，连接未建立"));
         }
@@ -394,14 +403,14 @@ impl WsActor {
                     match e {
                         tokio_tungstenite::tungstenite::Error::ConnectionClosed => {
                             error!("检测到连接已关闭，清理连接状态");
-                            self.connected = false;
+                            *self.connected.lock().await = false;
                             self.ws_sender = None;
                             self.ws_receiver_stream = None;
                             self.connect_internal().await?;
                         }
                         tokio_tungstenite::tungstenite::Error::AlreadyClosed => {
                             error!("检测到连接已关闭，清理连接状态");
-                            self.connected = false;
+                            *self.connected.lock().await = false;
                             self.ws_sender = None;
                             self.ws_receiver_stream = None;
                             self.connect_internal().await?;
@@ -415,7 +424,7 @@ impl WsActor {
                 }
             }
         } else {
-            self.connected = false;
+            *self.connected.lock().await = false;
             Err(Report::new(PaintboardError::ConnectionClosed).wrap_err("WebSocket 发送端不存在"))
         }
     }
@@ -424,7 +433,7 @@ impl WsActor {
         if let Some(mut ws_sender) = self.ws_sender.take() {
             let _ = ws_sender.close().await;
         }
-        self.connected = false;
+        *self.connected.lock().await = false;
         self.ws_receiver_stream = None; // 确保接收端也被清理
         Ok(())
     }
@@ -467,8 +476,8 @@ impl WsActor {
             >,
         >,
         response_tracker: Arc<WsResponseTracker>,
-        config: Arc<Config>,
-        reconnect_manager: Arc<TokioMutex<WsReconnectManager>>,
+        _config: Arc<Config>,
+        _reconnect_manager: Arc<TokioMutex<WsReconnectManager>>,
         actor_sender: mpsc::UnboundedSender<WsActorMessage>, // Add actor sender
     ) {
         loop {
@@ -637,9 +646,132 @@ impl WsActor {
         if let Some(handle) = self.cleanup_task_handle.take() {
             handle.abort();
         }
+        if let Some(handle) = self.health_check_task_handle.take() {
+            handle.abort();
+        }
 
         // 关闭连接
         let _ = self.close_internal().await;
+    }
+
+    /// 启动健康检查任务
+    async fn start_health_check_task(&mut self) {
+        let response_tracker_clone = self.response_tracker.clone();
+        let actor_sender = self.sender.clone();
+        let last_health_check_clone = self.last_health_check.clone();
+
+        let task_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30)); // 每30秒进行一次健康检查
+            
+            loop {
+                interval.tick().await;
+                
+                // 检查连接是否仍然存在（通过发送 IsConnected 请求）
+                let (is_connected_tx, is_connected_rx) = oneshot::channel();
+                let check_conn_msg = WsActorMessage::Connection(ConnectionRequest::IsConnected(is_connected_tx));
+                
+                if let Err(_) = actor_sender.send(check_conn_msg) {
+                    continue; // 如果无法发送消息，跳过本次检查
+                }
+                
+                let is_connected = match tokio::time::timeout(std::time::Duration::from_millis(100), is_connected_rx).await {
+                    Ok(Ok(result)) => result,
+                    _ => false,
+                };
+                
+                if !is_connected {
+                    // 如果未连接，则跳过健康检查
+                    continue;
+                }
+
+                // 更新健康检查时间
+                {
+                    let mut guard = last_health_check_clone.lock().await;
+                    *guard = Instant::now();
+                }
+
+                // 创建一个无效的 PaintRequest 用于健康检查
+                use crate::models::{Pos, Rgb, PaintOperation};
+                use rand;
+                
+                let invalid_token = "0000000-00-0000-0000-00000000"; // 无效的 UUID
+                let invalid_uid = 0u32; // 无效的 UID
+                let pos = Pos { x: 0, y: 0 };
+                let color = Rgb { r: 0, g: 0, b: 0 };
+                let paint_id = rand::random::<u32>();
+
+                let operation = PaintOperation {
+                    pos,
+                    color,
+                    token_uid: invalid_uid,
+                    token: invalid_token.to_string(),
+                    paint_id: paint_id as u32,
+                };
+
+                let binary_data = operation.to_binary();
+
+                // 注册响应接收器
+                let response_rx = response_tracker_clone.register_request(paint_id).await;
+
+                // 通过 actor 发送消息
+                let (send_response_tx, _) = oneshot::channel(); // 不关心发送结果
+                let message = WsActorMessage::Send(SendRequest::SendBinary {
+                    data: binary_data,
+                    response_tx: send_response_tx,
+                });
+
+                if let Err(_) = actor_sender.send(message) {
+                    // 发送失败，连接可能已断开
+                    // 发送 MarkDisconnected 消息来标记连接断开
+                    let _ = actor_sender.send(WsActorMessage::Connection(
+                        ConnectionRequest::MarkDisconnected,
+                    ));
+                    continue;
+                }
+
+                // 等待响应，设置较短的超时时间
+                match tokio::time::timeout(std::time::Duration::from_secs(5), response_rx).await {
+                    Ok(Ok(result)) => {
+                        // 收到响应，检查是否是预期的 "Token 无效" 状态
+                        match result.status {
+                            PaintStatus::InvalidToken => {
+                                // 收到预期的响应，说明连接健康
+                                debug!("健康检查成功：收到预期的无效 Token 响应");
+                            }
+                            _ => {
+                                // 收到其他响应，可能表示连接有问题
+                                warn!("健康检查失败：收到意外响应状态 {:?}", result.status);
+                                
+                                // 发送 MarkDisconnected 消息来标记连接断开
+                                let _ = actor_sender.send(WsActorMessage::Connection(
+                                    ConnectionRequest::MarkDisconnected,
+                                ));
+                            }
+                        }
+                    }
+                    Ok(Err(_)) => {
+                        // 响应通道关闭，说明连接有问题
+                        warn!("健康检查失败：响应通道关闭");
+                        
+                        // 发送 MarkDisconnected 消息来标记连接断开
+                        let _ = actor_sender.send(WsActorMessage::Connection(
+                            ConnectionRequest::MarkDisconnected,
+                        ));
+                    }
+                    Err(_) => {
+                        // 超时，说明连接有问题
+                        warn!("健康检查超时：未收到响应");
+                        
+                        // 发送 MarkDisconnected 消息来标记连接断开
+                        let _ = actor_sender.send(WsActorMessage::Connection(
+                            ConnectionRequest::MarkDisconnected,
+                        ));
+                    }
+                }
+            }
+        });
+
+        self.health_check_task_handle = Some(task_handle);
     }
 }
 
@@ -734,7 +866,7 @@ impl AsyncWsProvider {
 
         let _ = self.sender.send(message);
 
-        match tokio::time::timeout(Duration::from_millis(100), response_rx).await {
+        match tokio::time::timeout(Duration::from_millis(3000), response_rx).await {
             Ok(Ok(result)) => result,
             _ => false,
         }
