@@ -30,14 +30,14 @@ impl TokenLease {
         cd_duration: Duration,
     ) -> Self {
         // 网络延迟问题
-        let cd_duration = Duration::from_millis(
-            (cd_duration.as_millis() + 300).try_into().unwrap_or(
-                cd_duration
-                    .as_millis()
-                    .try_into()
-                    .expect("这个错误理论上不可能发生"),
-            ),
-        );
+        // let cd_duration = Duration::from_millis(
+        //     (cd_duration.as_millis() + 300).try_into().unwrap_or(
+        //         cd_duration
+        //             .as_millis()
+        //             .try_into()
+        //             .expect("这个错误理论上不可能发生"),
+        //     ),
+        // );
 
         Self {
             index,
