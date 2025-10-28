@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
+use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
-use tokio::{sync::RwLock, time::sleep};
 use winter_paintboard_sdk::models::{Board, Pos, Rgb};
 
 use crate::app::multi_token::cli::get_penalty_scale;
@@ -60,7 +60,7 @@ impl LocalBoard {
     }
 
     /// 更新像素颜色，保留来源信息和时间戳
-    pub fn update_pixel(&mut self, x: u16, y: u16, color: Rgb, source: PixelSource) {
+    pub async fn update_pixel(&mut self, x: u16, y: u16, color: Rgb, source: PixelSource) {
         if x < self.width && y < self.height {
             let current_time = std::time::SystemTime::now();
             let pos = Pos::new(x, y).expect("Invalid coordinates for Pos creation"); // Pos struct ensures valid coordinates
@@ -74,35 +74,12 @@ impl LocalBoard {
                 },
             );
 
-            let heatmap = self.heatmap.clone();
-            tokio::spawn(async move {
-                // 增加热力图计数
-                {
-                    let mut heatmap = heatmap.write().await;
-                    *heatmap.entry(pos.clone()).or_insert(0) += 1;
-                }
-
-                // 10min 后减少热力图计数
-                sleep(Duration::from_millis(HEATMAP_EXPIRE_DURATION_MILLS)).await;
-
-                {
-                    let mut heatmap = heatmap.write().await;
-                    match heatmap.entry(pos) {
-                        std::collections::hash_map::Entry::Occupied(mut entry) => {
-                            let count = entry.get_mut();
-                            if *count > 0 {
-                                *count -= 1;
-                                if *count == 0 {
-                                    entry.remove();
-                                }
-                            }
-                        }
-                        std::collections::hash_map::Entry::Vacant(_) => {
-                            // 如果条目不存在，无需操作
-                        }
-                    }
-                }
-            });
+            // TODO: 热力图 count 减少
+            {
+                let heatmap = self.heatmap.clone();
+                let mut heatmap = heatmap.write();
+                *heatmap.entry(pos.clone()).or_insert(0) += 1;
+            }
 
             self.version += 1;
         }
@@ -225,7 +202,7 @@ impl LocalBoard {
         self.is_initialized = true;
         self.last_sync_time = Some(std::time::SystemTime::now());
     }
-    
+
     /// 检查数据完整性
     #[deprecated(note = "不必要的完整性检查，造成性能损耗，改为返回 `true`")]
     pub fn verify_integrity(&self) -> bool {

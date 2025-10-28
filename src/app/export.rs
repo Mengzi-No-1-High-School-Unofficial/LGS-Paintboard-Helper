@@ -101,7 +101,7 @@ impl ExportManager {
 
             // 读取热点图数据
             let heatmap = board.get_heatmap();
-            let heatmap_data = heatmap.read().await;
+            let heatmap_data = heatmap.read();
 
             // 遍历所有像素位置，根据热点图值设置颜色
             for y in 0..height {
