@@ -362,7 +362,7 @@ impl WsActor {
                             self.ws_sender = None;
                             self.ws_receiver_stream = None;
                             self.connect_internal().await?;
-                        },
+                        }
                         _ => {
                             return Err(Report::new(e).wrap_err("发送消息失败"));
                         }
@@ -414,7 +414,7 @@ impl WsActor {
                             self.ws_sender = None;
                             self.ws_receiver_stream = None;
                             self.connect_internal().await?;
-                        },
+                        }
                         _ => {
                             return Err(Report::new(e).wrap_err("发送 Pong 消息失败"));
                         }
@@ -662,23 +662,29 @@ impl WsActor {
 
         let task_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30)); // 每30秒进行一次健康检查
-            
+
             loop {
                 interval.tick().await;
-                
+
                 // 检查连接是否仍然存在（通过发送 IsConnected 请求）
                 let (is_connected_tx, is_connected_rx) = oneshot::channel();
-                let check_conn_msg = WsActorMessage::Connection(ConnectionRequest::IsConnected(is_connected_tx));
-                
+                let check_conn_msg =
+                    WsActorMessage::Connection(ConnectionRequest::IsConnected(is_connected_tx));
+
                 if let Err(_) = actor_sender.send(check_conn_msg) {
                     continue; // 如果无法发送消息，跳过本次检查
                 }
-                
-                let is_connected = match tokio::time::timeout(std::time::Duration::from_millis(100), is_connected_rx).await {
+
+                let is_connected = match tokio::time::timeout(
+                    std::time::Duration::from_millis(100),
+                    is_connected_rx,
+                )
+                .await
+                {
                     Ok(Ok(result)) => result,
                     _ => false,
                 };
-                
+
                 if !is_connected {
                     // 如果未连接，则跳过健康检查
                     continue;
@@ -691,9 +697,9 @@ impl WsActor {
                 }
 
                 // 创建一个无效的 PaintRequest 用于健康检查
-                use crate::models::{Pos, Rgb, PaintOperation};
+                use crate::models::{PaintOperation, Pos, Rgb};
                 use rand;
-                
+
                 let invalid_token = "0000000-00-0000-0000-00000000"; // 无效的 UUID
                 let invalid_uid = 0u32; // 无效的 UID
                 let pos = Pos { x: 0, y: 0 };
@@ -729,6 +735,8 @@ impl WsActor {
                     continue;
                 }
 
+                let mut should_reconnect: bool = false;
+
                 // 等待响应，设置较短的超时时间
                 match tokio::time::timeout(std::time::Duration::from_secs(5), response_rx).await {
                     Ok(Ok(result)) => {
@@ -741,7 +749,7 @@ impl WsActor {
                             _ => {
                                 // 收到其他响应，可能表示连接有问题
                                 warn!("健康检查失败：收到意外响应状态 {:?}", result.status);
-                                
+
                                 // 发送 MarkDisconnected 消息来标记连接断开
                                 let _ = actor_sender.send(WsActorMessage::Connection(
                                     ConnectionRequest::MarkDisconnected,
@@ -752,20 +760,58 @@ impl WsActor {
                     Ok(Err(_)) => {
                         // 响应通道关闭，说明连接有问题
                         warn!("健康检查失败：响应通道关闭");
-                        
+
                         // 发送 MarkDisconnected 消息来标记连接断开
                         let _ = actor_sender.send(WsActorMessage::Connection(
                             ConnectionRequest::MarkDisconnected,
                         ));
+
+                        should_reconnect = true;
                     }
                     Err(_) => {
                         // 超时，说明连接有问题
                         warn!("健康检查超时：未收到响应");
-                        
+
                         // 发送 MarkDisconnected 消息来标记连接断开
                         let _ = actor_sender.send(WsActorMessage::Connection(
                             ConnectionRequest::MarkDisconnected,
                         ));
+
+                        should_reconnect = true;
+                    }
+                }
+
+                if should_reconnect {
+                    let (connect_response_tx, connect_response_rx) = oneshot::channel();
+
+                    let _ = actor_sender.send(WsActorMessage::Connection(
+                        ConnectionRequest::Connect(connect_response_tx),
+                    ));
+
+                    let result: Result<Result<Result<(), PaintboardError>, oneshot::error::RecvError>, tokio::time::error::Elapsed> =
+                        tokio::time::timeout(Duration::from_secs(5), connect_response_rx).await;
+
+                    match result {
+                        Ok(result) => {
+                            match result {
+                                Ok(connect_result) => {
+                                    match connect_result {
+                                        Ok(_) => {
+                                            debug!("健康检查后重连成功");
+                                        }
+                                        Err(e) => {
+                                            warn!("{}", Report::new(e).wrap_err("健康检查后重连失败"));
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    warn!("{}", Report::new(PaintboardError::Internal("Actor 响应通道关闭".to_string())).wrap_err("健康检查后重连失败"));
+                                }
+                            }
+                        },
+                        Err(_) => {
+                            warn!("{}", Report::new(PaintboardError::timeout()).wrap_err("健康检查后重连超时"));
+                        }
                     }
                 }
             }
