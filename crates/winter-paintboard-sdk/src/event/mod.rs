@@ -1,6 +1,7 @@
 use crate::models::{Pos, Rgb};
 use std::sync::OnceLock;
 use tokio::sync::broadcast;
+use color_eyre::Report;
 
 /// Winter Paintboard SDK 的事件类型。
 /// 这些事件由客户端发出或接收，用于通知应用程序状态变化。
@@ -18,8 +19,6 @@ pub enum Event {
     ConnectionClosed,
     /// 包含关闭状态码的 WebSocket 连接关闭事件。
     ConnectionClosedWithCode(u16),
-    /// 发生错误事件，包含错误信息。已被弃用
-    ErrorOccurred(String),
 }
 
 impl Event {
@@ -48,15 +47,6 @@ impl Event {
     /// - `color`: 绘制的像素颜色。
     pub fn paint_event(pos: Pos, color: Rgb) -> Self {
         Event::OtherPaintEvent { pos, color }
-    }
-
-    /// 创建一个表示发生错误的事件。
-    ///
-    /// # 参数
-    /// - `message`: 错误的详细信息。
-    #[deprecated]
-    pub fn error_event(message: String) -> Self {
-        Event::ErrorOccurred(message)
     }
 }
 
@@ -148,14 +138,15 @@ impl EventBus {
     /// - `capacity`: 自定义的事件通道容量。
     ///
     /// # 返回
-    /// `Result`，成功时返回 `()`，表示初始化成功，
-    /// 失败时包含 `EventBusError::SendError`，表示全局事件总线已初始化。
-    pub fn init_global_with_capacity(capacity: usize) -> Result<(), EventBusError> {
+    /// `Result`，成功时返回 `()`，表示初始化成功
+    pub fn init_global_with_capacity(capacity: usize) -> Result<(), Report> {
         match GLOBAL_EVENT_BUS.set(EventBus::new(capacity)) {
             Ok(()) => Ok(()),
-            Err(_) => Err(EventBusError::SendError(Event::ErrorOccurred(
-                "Global event bus already initialized".to_string(),
-            ))),
+            Err(_) => {
+                let report = Report::msg("初始化事件总线错误，已初始化");
+
+                Err(report)
+            },
         }
     }
 }

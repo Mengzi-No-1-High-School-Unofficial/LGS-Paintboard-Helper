@@ -35,7 +35,7 @@ pub mod utils;
 
 /// 从客户端模块导出主要客户端类型和工厂函数。
 pub use basic_client::{
-    create_client_by_type, AsyncClient, ClientType, HttpProvider, PaintboardClientTrait, WsProvider,
+    create_client_by_type, AsyncClient, ClientType, HttpProvider, PaintboardClientTrait, AsyncWsProvider,
 };
 /// 导出SDK的统一错误类型。
 pub use error::PaintboardError;

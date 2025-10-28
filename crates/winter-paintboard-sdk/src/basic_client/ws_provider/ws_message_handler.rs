@@ -58,10 +58,6 @@ impl WsMessageHandler {
 
             Message::Text(text) => {
                 warn!("⚠️  收到意外的文本消息: {}", text);
-                let _ = EventBus::global().send(crate::event::Event::error_event(format!(
-                    "Received unexpected text message: {}",
-                    text
-                )));
             }
 
             Message::Ping(payload) => {
@@ -104,10 +100,6 @@ impl WsMessageHandler {
                 if let Some(ref mut ws_stream) = *guard {
                     if let Err(e) = ws_stream.send(Message::Binary(pong_msg)).await {
                         error!("❌ 心跳 PONG 发送失败: {}", e);
-                        let _ = EventBus::global().send(crate::event::Event::error_event(format!(
-                            "Heartbeat PONG send failed: {}",
-                            e
-                        )));
                     } else {
                         debug!("✅ 心跳 PONG 发送成功");
                     }
@@ -213,8 +205,6 @@ impl WsMessageHandler {
                                 }
                                 drop(cleanup_guard);
 
-                                let _ = EventBus::global()
-                                    .send(Event::error_event(format!("WebSocket error: {}", e)));
                                 break; // break inner loop to attempt reconnection
                             }
                             None => {

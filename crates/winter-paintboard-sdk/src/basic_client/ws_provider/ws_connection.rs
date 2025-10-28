@@ -67,11 +67,6 @@ impl WsConnection {
             }
             Err(e) => {
                 debug!("WebSocket 连接失败: {}", e);
-                let event_bus = EventBus::global();
-                let _ = event_bus.send(crate::event::Event::error_event(format!(
-                    "WebSocket connection failed: {}",
-                    e
-                )));
                 Err(PaintboardError::websocket(e.to_string()))
             }
         }
@@ -112,12 +107,6 @@ impl WsConnection {
                     error!("检测到连接已关闭，清理连接状态");
                     drop(guard.take()); // 清理无效连接
                 }
-
-                let event_bus = EventBus::global();
-                let _ = event_bus.send(crate::event::Event::error_event(format!(
-                    "Failed to send binary message: {}",
-                    e
-                )));
 
                 Err(Report::new(e).wrap_err("发送消息失败"))
             }

@@ -19,11 +19,11 @@ async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
 
     // Initialize tracing subscriber with environment filter (controlled by RUST_LOG)
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    // tracing_subscriber::fmt()
+        // .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        // .init();
 
-    // console_subscriber::init();
+    console_subscriber::init();
 
     // Parse command line arguments using clap
     let cli = app::cli::Cli::parse();

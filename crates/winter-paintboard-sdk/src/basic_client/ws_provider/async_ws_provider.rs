@@ -314,10 +314,6 @@ impl WsActor {
             Err(e) => {
                 error!("WebSocket 连接失败: {}", e); // Changed from debug to error
                 let event_bus = EventBus::global();
-                let _ = event_bus.send(Event::error_event(format!(
-                    "WebSocket connection failed: {}",
-                    e
-                )));
                 Err(PaintboardError::websocket(e.to_string()))
             }
         }
@@ -528,10 +524,6 @@ impl WsActor {
 
                         tokio_tungstenite::tungstenite::protocol::Message::Text(text) => {
                             warn!("收到意外的文本消息: {}", text);
-                            let _ = EventBus::global().send(Event::error_event(format!(
-                                "Received unexpected text message: {}",
-                                text
-                            )));
                         }
                         _ => {
                             debug!("收到其他类型的消息");
@@ -540,8 +532,6 @@ impl WsActor {
                 }
                 Some(Err(e)) => {
                     error!("WebSocket 错误: {}", e);
-                    let _ = EventBus::global()
-                        .send(Event::error_event(format!("WebSocket error: {}", e)));
                     break; // 退出循环
                 }
                 None => {

@@ -19,7 +19,7 @@ pub use http_client::HttpProvider;
 /// 导出 Paintboard 客户端的 trait 定义。
 pub use paintboard_client_trait::PaintboardClientTrait;
 /// 导出 WebSocket 客户端提供者。
-pub use ws_provider::WsProvider;
+pub use ws_provider::AsyncWsProvider;
 
 use crate::{
     config::Config,

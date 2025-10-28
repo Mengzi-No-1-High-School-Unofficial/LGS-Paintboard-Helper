@@ -272,9 +272,6 @@ impl BoardSyncManager {
             Event::ConnectionClosed => {
                 warn!("WebSocket连接已关闭");
             }
-            Event::ErrorOccurred(error_msg) => {
-                error!("WebSocket错误: {}", error_msg);
-            }
             Event::ConnectionClosedWithCode(code) => {
                 warn!("WebSocket连接已关闭，状态码: {}", code);
             }
