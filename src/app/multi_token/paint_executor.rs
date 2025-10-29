@@ -145,7 +145,7 @@ impl PaintExecutor {
                                 request.pixel.pos.y,
                                 request.pixel.color,
                                 PixelSource::Own,
-                            );
+                            ).await;
 
                             info!(
                                 "成功在 ({}, {}) 使用 Token {} 绘制像素（优先级 {}）",

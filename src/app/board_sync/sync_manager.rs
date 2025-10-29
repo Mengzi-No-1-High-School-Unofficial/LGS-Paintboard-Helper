@@ -76,7 +76,7 @@ impl BoardSyncManager {
                         Ok(board_data) => {
                             {
                                 let mut board = sync_manager.local_board.write().await;
-                                board.update_from_board(&board_data);
+                                board.update_from_board(&board_data).await;
                                 board.set_sync_status(SyncStatus::Idle);
                                 info!(
                                     "全量同步完成，获取到 {} 个像素数据",
@@ -160,7 +160,7 @@ impl BoardSyncManager {
                         let mut board = sync_manager.local_board.write().await;
 
                         // 执行差异同步（update_from_board 方法会进行实际的差异比较和更新）
-                        board.update_from_board(&board_data);
+                        board.update_from_board(&board_data).await;
 
                         // 验证同步后的数据一致性
                         if !board.verify_integrity() {
@@ -253,14 +253,14 @@ impl BoardSyncManager {
                 // debug!("😊 处理自己的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
                 {
                     let mut board = local_board.write().await;
-                    board.update_pixel(pos.x, pos.y, color, PixelSource::Own);
+                    board.update_pixel(pos.x, pos.y, color, PixelSource::Own).await;
                 }
             }
             Event::OtherPaintEvent { pos, color } => {
                 // debug!("👀 处理他人的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
                 {
                     let mut board = local_board.write().await;
-                    board.update_pixel(pos.x, pos.y, color, PixelSource::Other);
+                    board.update_pixel(pos.x, pos.y, color, PixelSource::Other).await;
                 }
             }
             Event::HeartbeatEvent => {

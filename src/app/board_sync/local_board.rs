@@ -106,7 +106,7 @@ impl LocalBoard {
     }
 
     /// 从Board对象更新本地数据 - 这是权威数据
-    pub fn update_from_board(&mut self, board: &Board) {
+    pub async fn update_from_board(&mut self, board: &Board) {
         // 全量更新时，服务器数据是绝对权威
         // 但不直接清空，而是对比并更新差异
 
@@ -175,12 +175,12 @@ impl LocalBoard {
         // 执行实际的更新操作
         for (pos, new_status) in &updates {
             // self.pixels.insert(pos.clone(), new_status.clone());
-            self.update_pixel(pos.x, pos.y, new_status.color.clone(), PixelSource::Other);
+            self.update_pixel(pos.x, pos.y, new_status.color.clone(), PixelSource::Other).await;
         }
 
         for (pos, new_status) in &additions {
             // self.pixels.insert(pos.clone(), new_status.clone());
-            self.update_pixel(pos.x, pos.y, new_status.color.clone(), PixelSource::Other);
+            self.update_pixel(pos.x, pos.y, new_status.color.clone(), PixelSource::Other).await;
         }
 
         for pos in &removals {
