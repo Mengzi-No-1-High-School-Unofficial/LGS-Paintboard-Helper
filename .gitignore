@@ -6,3 +6,4 @@ __pycache__/
 
 tokens.csv
 exported_tokens.json
+perf.data
