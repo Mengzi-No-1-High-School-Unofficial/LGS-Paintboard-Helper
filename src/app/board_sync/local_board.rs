@@ -75,11 +75,11 @@ impl LocalBoard {
             );
 
             // TODO: 热力图 count 减少
-            {
-                let heatmap = self.heatmap.clone();
-                let mut heatmap = heatmap.write();
-                *heatmap.entry(pos.clone()).or_insert(0) += 1;
-            }
+            // {
+            //     let heatmap = self.heatmap.clone();
+            //     let mut heatmap = heatmap.write();
+            //     *heatmap.entry(pos.clone()).or_insert(0) += 1;
+            // }
 
             self.version += 1;
         }
