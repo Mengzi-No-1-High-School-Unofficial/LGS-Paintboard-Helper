@@ -278,10 +278,11 @@ impl MultiTokenService {
                     let priority = if let Some(current_pixel) = local_pixels.get(pos) {
                         if current_pixel.color != *target_color {
                             // 使用 Canny 优先级，如果该像素是边缘，则使用其边缘强度，否则使用一个较低的默认值
-                            *target_image
-                                .pixel_canny_priorities
-                                .get(&relative_pos)
-                                .unwrap_or(&0.0)
+                            // *target_image
+                                // .pixel_canny_priorities
+                                // .get(&relative_pos)
+                                // .unwrap_or(&0.0)
+                            ((pos.x + pos.y) % 8) as f64
                         } else {
                             continue; // 颜色一致，跳过
                         }
