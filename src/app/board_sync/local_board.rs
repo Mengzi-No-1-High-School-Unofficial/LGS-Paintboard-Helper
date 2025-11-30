@@ -1,3 +1,8 @@
+//! 本地画板同步模块
+//!
+//! 该模块实现了本地画板数据的存储和同步功能，包括像素数据、热力图、
+//! 数据完整性验证等功能。
+
 use std::{sync::Arc, time::Duration};
 
 use parking_lot::RwLock;
@@ -6,46 +11,79 @@ use winter_paintboard_sdk::models::{Board, Pos, Rgb};
 
 use crate::app::multi_token::cli::get_penalty_scale;
 
+/// 热力图过期时间（毫秒）
 const HEATMAP_EXPIRE_DURATION_MILLS: u64 = 10 * 60 * 1000; // 10min
 
-// 像素状态，区分来源和时间戳
+/// 像素来源枚举，用于区分像素是来自自己的绘制还是其他用户的绘制
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PixelSource {
-    Own = 0,   // 来自自己的绘制
-    Other = 1, // 来自其他用户的绘制
+    /// 来自自己的绘制
+    Own = 0,
+    /// 来自其他用户的绘制
+    Other = 1,
 }
 
+/// 像素状态结构
+///
+/// 包含像素的颜色、来源和时间戳信息
 #[derive(Debug, Clone)]
 pub struct PixelStatus {
+    /// 像素颜色
     pub color: Rgb,
+    /// 像素来源（自己绘制或他人绘制）
     pub source: PixelSource,
+    /// 像素更新时间戳
     pub timestamp: std::time::SystemTime,
 }
 
-// 本地绘版数据结构，使用高性能HashMap存储
+/// 本地画板数据结构，使用高性能HashMap存储
+///
+/// 管理本地画板的像素数据、热力图、同步状态等信息
 #[derive(Debug)]
 pub struct LocalBoard {
-    // 使用FxHashMap存储像素位置到颜色的映射
+    /// 使用FxHashMap存储像素位置到状态的映射
     pixels: FxHashMap<Pos, PixelStatus>,
+    /// 热力图数据，用于记录像素被绘制的频率
     heatmap: Arc<RwLock<FxHashMap<Pos, u32>>>,
+    /// 最后同步时间
     last_sync_time: Option<std::time::SystemTime>,
+    /// 同步状态
     sync_status: SyncStatus,
+    /// 是否已初始化
     is_initialized: bool,
+    /// 画板宽度
     width: u16,
+    /// 画板高度
     height: u16,
-    // 添加版本号以跟踪数据更新
+    /// 版本号，用于跟踪数据更新
     version: u64,
 }
 
 #[derive(Debug, Clone)]
+/// 同步状态枚举
+///
+/// 表示本地画板与服务器同步的不同状态
 pub enum SyncStatus {
+    /// 空闲状态
     Idle,
+    /// 正在同步
     Syncing,
+    /// 同步错误，包含错误信息
     Error(String),
 }
 
 impl LocalBoard {
+    /// 创建新的本地画板实例
+    ///
+    /// # 参数
+    ///
+    /// * `width` - 画板宽度
+    /// * `height` - 画板高度
+    ///
+    /// # 返回值
+    ///
+    /// 返回初始化的本地画板实例
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             pixels: FxHashMap::default(),
@@ -60,6 +98,13 @@ impl LocalBoard {
     }
 
     /// 更新像素颜色，保留来源信息和时间戳
+    ///
+    /// # 参数
+    ///
+    /// * `x` - 像素X坐标
+    /// * `y` - 像素Y坐标
+    /// * `color` - 像素颜色
+    /// * `source` - 像素来源（自己绘制或他人绘制）
     pub async fn update_pixel(&mut self, x: u16, y: u16, color: Rgb, source: PixelSource) {
         if x < self.width && y < self.height {
             let current_time = std::time::SystemTime::now();
@@ -85,7 +130,16 @@ impl LocalBoard {
         }
     }
 
-    /// 获取像素颜色
+    /// 获取指定坐标的像素颜色
+    ///
+    /// # 参数
+    ///
+    /// * `x` - 像素X坐标
+    /// * `y` - 像素Y坐标
+    ///
+    /// # 返回值
+    ///
+    /// 如果坐标有效且存在像素，则返回像素颜色；否则返回None
     pub fn get_pixel(&self, x: u16, y: u16) -> Option<Rgb> {
         if x < self.width && y < self.height {
             let pos = Pos::new(x, y).expect("Invalid coordinates for Pos creation");
@@ -96,16 +150,30 @@ impl LocalBoard {
     }
 
     /// 获取所有像素数据的引用
+    ///
+    /// # 返回值
+    ///
+    /// 返回指向内部像素数据映射的引用
     pub fn get_pixels(&self) -> &FxHashMap<Pos, PixelStatus> {
         &self.pixels
     }
 
-    /// 获取heatmap的Arc引用，用于外部读取
+    /// 获取热力图的Arc引用，用于外部读取
+    ///
+    /// # 返回值
+    ///
+    /// 返回指向热力图数据的Arc引用
     pub fn get_heatmap(&self) -> &Arc<RwLock<FxHashMap<Pos, u32>>> {
         &self.heatmap
     }
 
     /// 从Board对象更新本地数据 - 这是权威数据
+    ///
+    /// 使用服务器的Board数据全量更新本地画板数据，服务器数据是绝对权威
+    ///
+    /// # 参数
+    ///
+    /// * `board` - 服务器画板数据
     pub async fn update_from_board(&mut self, board: &Board) {
         // 全量更新时，服务器数据是绝对权威
         // 但不直接清空，而是对比并更新差异
@@ -204,37 +272,65 @@ impl LocalBoard {
     }
 
     /// 检查数据完整性
+    ///
+    /// # 返回值
+    ///
+    /// 由于不必要的完整性检查会造成性能损耗，此函数已废弃并始终返回true
     #[deprecated(note = "不必要的完整性检查，造成性能损耗，改为返回 `true`")]
     pub fn verify_integrity(&self) -> bool {
         true
     }
 
-    /// 检查是否已初始化
+    /// 检查本地画板是否已初始化
+    ///
+    /// # 返回值
+    ///
+    /// 如果已初始化返回true，否则返回false
     pub fn is_initialized(&self) -> bool {
         self.is_initialized
     }
 
-    /// 获取同步状态
+    /// 获取当前同步状态
+    ///
+    /// # 返回值
+    ///
+    /// 返回当前的同步状态引用
     pub fn sync_status(&self) -> &SyncStatus {
         &self.sync_status
     }
 
     /// 设置同步状态
+    ///
+    /// # 参数
+    ///
+    /// * `status` - 新的同步状态
     pub fn set_sync_status(&mut self, status: SyncStatus) {
         self.sync_status = status;
     }
 
     /// 获取最后同步时间
+    ///
+    /// # 返回值
+    ///
+    /// 返回最后同步时间的引用（如果存在）
     pub fn last_sync_time(&self) -> Option<&std::time::SystemTime> {
         self.last_sync_time.as_ref()
     }
 
-    /// 获取绘版尺寸
+    /// 获取画板尺寸
+    ///
+    /// # 返回值
+    ///
+    /// 返回画板的宽度和高度
     pub fn dimensions(&self) -> (u16, u16) {
         (self.width, self.height)
     }
 
     /// 获取当前版本号
+    ///
+    /// # 返回值
+    ///
+    /// 返回本地画板数据的当前版本号
     pub fn version(&self) -> u64 {
         self.version
     }

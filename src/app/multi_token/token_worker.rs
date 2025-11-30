@@ -1,3 +1,8 @@
+//! Token工作器模块
+//!
+//! 该模块实现了Token工作器，负责从像素队列获取任务并使用可用的Token
+//! 发送绘制请求。
+
 use log::{debug, error};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -8,15 +13,32 @@ use crate::app::multi_token::token_manager::TokenManager;
 use winter_paintboard_sdk::PaintboardClientTrait;
 
 /// Token 工作器
+///
+/// 负责从像素队列获取任务并使用可用的Token发送绘制请求
 pub struct TokenWorker {
+    /// 工作器ID
     worker_id: usize,
+    /// Token管理器
     token_manager: Arc<TokenManager>,
+    /// 像素队列
     pixel_queue: Arc<PixelQueue>,
+    /// 绘制请求队列
     request_queue: Arc<crate::app::multi_token::paint_executor::PaintRequestQueue>,
 }
 
 impl TokenWorker {
     /// 创建新的 Worker
+    ///
+    /// # 参数
+    ///
+    /// * `worker_id` - 工作器ID
+    /// * `token_manager` - Token管理器
+    /// * `pixel_queue` - 像素队列
+    /// * `request_queue` - 绘制请求队列
+    ///
+    /// # 返回值
+    ///
+    /// 返回初始化的TokenWorker实例
     pub fn new(
         worker_id: usize,
         token_manager: Arc<TokenManager>,
@@ -32,6 +54,17 @@ impl TokenWorker {
     }
 
     /// 启动 Worker 主循环
+    ///
+    /// 启动工作器主循环，持续从像素队列获取任务并使用可用Token发送绘制请求
+    ///
+    /// # 参数
+    ///
+    /// * `stop_signal` - 停止信号
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(())` - 正常停止
+    /// * `Err` - 运行过程中发生错误
     pub async fn run(
         &self,
         stop_signal: Arc<AtomicBool>,

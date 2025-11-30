@@ -1,3 +1,8 @@
+//! 画板数据导出模块
+//!
+//! 该模块提供了将本地画板数据导出为图片文件的功能，包括完整的画板状态
+//! 和热点图（显示绘制频率的可视化图）。支持定时导出功能。
+
 use image::{Rgb, RgbImage};
 use log::{error, info, warn};
 use std::fs;
@@ -9,6 +14,8 @@ use tokio::time::{interval, Duration};
 use crate::app::board_sync::{BoardSyncManager, LocalBoard};
 
 /// 图片导出管理器
+///
+/// 负责将本地画板数据导出为图片文件，支持完整的画板状态和热点图导出
 pub struct ExportManager {
     local_board: Arc<RwLock<LocalBoard>>,
     export_dir: PathBuf,
@@ -17,6 +24,16 @@ pub struct ExportManager {
 
 impl ExportManager {
     /// 创建新的导出管理器
+    ///
+    /// # 参数
+    ///
+    /// * `local_board` - 本地画板的共享引用
+    /// * `export_dir` - 导出文件的目录路径
+    /// * `export_interval` - 导出时间间隔
+    ///
+    /// # 返回值
+    ///
+    /// 返回配置好的导出管理器实例
     pub fn new(
         local_board: Arc<RwLock<LocalBoard>>,
         export_dir: PathBuf,
@@ -30,6 +47,13 @@ impl ExportManager {
     }
 
     /// 将本地绘版数据导出为图片
+    ///
+    /// 将当前本地画板的状态导出为PNG图片文件，文件名包含时间戳
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(())` - 成功导出图片
+    /// * `Err` - 导出过程中发生错误
     pub async fn export_board_image(&self) -> Result<(), Box<dyn std::error::Error>> {
         // 确保导出目录存在
         fs::create_dir_all(&self.export_dir)?;
@@ -75,6 +99,13 @@ impl ExportManager {
     }
 
     /// 将热点图数据导出为图片
+    ///
+    /// 将绘制频率数据导出为可视化热点图，颜色强度表示该位置的绘制频率
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok())` - 成功导出热点图
+    /// * `Err` - 导出过程中发生错误
     pub async fn export_heatmap_image(&self) -> Result<(), Box<dyn std::error::Error>> {
         // 确保导出目录存在
         fs::create_dir_all(&self.export_dir)?;
@@ -126,7 +157,16 @@ impl ExportManager {
     }
 
     /// 将强度值转换为RGB颜色
-    /// 强度值越大，颜色越偏向红色，表示热点区域
+    ///
+    /// 根据绘制频率强度值生成对应的RGB颜色，强度越高越红，表示热点区域
+    ///
+    /// # 参数
+    ///
+    /// * `intensity` - 绘制频率强度值
+    ///
+    /// # 返回值
+    ///
+    /// 对应强度值的RGB颜色
     fn intensity_to_color(&self, intensity: u32) -> Rgb<u8> {
         // 根据强度值生成颜色，强度越高越红
         // 可以根据需要调整颜色映射算法
@@ -144,6 +184,13 @@ impl ExportManager {
     }
 
     /// 启动定时导出服务
+    ///
+    /// 启动一个后台任务，按照指定的时间间隔定期导出画板图片
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(())` - 成功启动导出服务
+    /// * `Err` - 启动过程中发生错误
     pub async fn start_export_service(&self) -> Result<(), Box<dyn std::error::Error>> {
         let local_board = self.local_board.clone();
         let export_dir = self.export_dir.clone();
@@ -173,6 +220,20 @@ impl ExportManager {
 }
 
 /// 便捷函数：根据参数启动导出服务
+///
+/// 根据启用标志决定是否启动画板图片导出服务
+///
+/// # 参数
+///
+/// * `sync_manager` - 画板同步管理器
+/// * `enable_export` - 是否启用导出功能
+/// * `export_dir` - 导出目录路径
+/// * `export_interval` - 导出时间间隔（秒）
+///
+/// # 返回值
+///
+/// * `Ok(())` - 成功启动导出服务或选择不启动
+/// * `Err` - 启动过程中发生错误
 pub async fn start_export_if_enabled(
     sync_manager: &BoardSyncManager,
     enable_export: bool,
@@ -200,6 +261,20 @@ pub async fn start_export_if_enabled(
 }
 
 /// 便捷函数：根据参数启动热点图导出服务
+///
+/// 根据启用标志决定是否启动热点图导出服务
+///
+/// # 参数
+///
+/// * `sync_manager` - 画板同步管理器
+/// * `enable_heatmap_export` - 是否启用热点图导出功能
+/// * `export_dir` - 导出目录路径
+/// * `export_interval` - 导出时间间隔（秒）
+///
+/// # 返回值
+///
+/// * `Ok(())` - 成功启动热点图导出服务或选择不启动
+/// * `Err` - 启动过程中发生错误
 pub async fn start_heatmap_export_if_enabled(
     sync_manager: &BoardSyncManager,
     enable_heatmap_export: bool,

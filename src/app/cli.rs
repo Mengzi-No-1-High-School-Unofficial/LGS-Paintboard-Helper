@@ -1,6 +1,14 @@
+//! 命令行参数解析模块
+//!
+//! 该模块定义了应用程序的命令行参数结构，使用 clap 库进行参数解析。
+//! 支持多种子命令，包括获取画板状态、显示项目信息和多Token绘制模式。
+
 use clap::{Parser, Subcommand};
 
-/// Winter Paintboard CLI client - 在洛谷画板上绘制图像的工具
+/// 应用程序的根命令行参数结构
+///
+/// 包含所有可用的子命令选项，通过 #[command(subcommand)] 属性指定
+/// 可用的子命令枚举类型 Commands。
 #[derive(Parser)]
 #[command(
     author = "Xyber Nova <xyber-nova@outlook.com>",

@@ -1,3 +1,8 @@
+//! 画板同步管理器模块
+//!
+//! 该模块负责管理本地画板与服务器之间的同步，包括全量同步、增量同步
+//! 和事件监听等功能。
+
 use log::{debug, error, info, warn};
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex, RwLock};
@@ -7,18 +12,34 @@ use winter_paintboard_sdk::PaintboardClientTrait;
 
 use super::local_board::{LocalBoard, PixelSource, SyncStatus};
 
-/// 绘版同步管理器
+/// 画板同步管理器
+///
+/// 负责协调本地画板与服务器之间的数据同步，包括全量同步、增量同步
+/// 和实时事件处理等功能
 #[derive(Clone)]
 pub struct BoardSyncManager {
+    /// 本地画板数据的Arc引用
     local_board: Arc<RwLock<LocalBoard>>,
+    /// 事件总线，用于处理实时事件
     event_bus: Arc<winter_paintboard_sdk::event::EventBus>, // 使用EventBus而不是Receiver
+    /// 停止标志，用于控制同步循环
     should_stop: Arc<RwLock<bool>>,
-    sync_in_progress: Arc<RwLock<bool>>, // 用于在同步期间暂停事件处理的标志
-    pending_events: Arc<Mutex<Vec<Event>>>, // 缓存同步期间收到的事件
+    /// 同步进行中标志，用于在同步期间暂停事件处理
+    sync_in_progress: Arc<RwLock<bool>>,
+    /// 待处理事件列表，缓存同步期间收到的事件
+    pending_events: Arc<Mutex<Vec<Event>>>,
 }
 
 impl BoardSyncManager {
     /// 创建新的同步管理器
+    ///
+    /// # 参数
+    ///
+    /// * `event_bus` - 事件总线引用
+    ///
+    /// # 返回值
+    ///
+    /// 返回初始化的同步管理器实例
     pub fn new(event_bus: &winter_paintboard_sdk::event::EventBus) -> Self {
         Self {
             local_board: Arc::new(RwLock::new(LocalBoard::new(1000, 600))),
@@ -29,12 +50,28 @@ impl BoardSyncManager {
         }
     }
 
-    /// 获取本地绘版数据的Arc引用
+    /// 获取本地画板数据的Arc引用
+    ///
+    /// # 返回值
+    ///
+    /// 返回指向本地画板数据的Arc引用
     pub fn local_board(&self) -> Arc<RwLock<LocalBoard>> {
         self.local_board.clone()
     }
 
     /// 开始全量同步循环
+    ///
+    /// 启动一个后台任务，定期从服务器获取完整的画板数据并更新本地数据
+    ///
+    /// # 参数
+    ///
+    /// * `client` - 画板客户端
+    /// * `sync_interval` - 同步间隔时间
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(())` - 成功启动同步循环
+    /// * `Err` - 启动过程中发生错误
     pub async fn start_sync_loop(
         &self,
         client: Box<dyn winter_paintboard_sdk::PaintboardClientTrait + Send>,
@@ -120,6 +157,19 @@ impl BoardSyncManager {
     }
 
     /// 开始增量同步循环 - 只同步发生变化的区域
+    ///
+    /// 启动一个后台任务，定期从服务器获取画板数据并与本地数据比较，
+    /// 只更新发生变化的部分
+    ///
+    /// # 参数
+    ///
+    /// * `client` - 画板客户端
+    /// * `sync_interval` - 同步间隔时间
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(())` - 成功启动增量同步循环
+    /// * `Err` - 启动过程中发生错误
     pub async fn start_incremental_sync_loop(
         &self,
         client: Arc<dyn winter_paintboard_sdk::PaintboardClientTrait + Send + Sync>,
@@ -194,6 +244,13 @@ impl BoardSyncManager {
     }
 
     /// 开始事件监听循环（增量更新）
+    ///
+    /// 启动一个后台任务，监听实时事件并更新本地画板数据
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(())` - 成功启动事件监听器
+    /// * `Err` - 启动过程中发生错误
     pub async fn start_event_listener(&self) -> Result<(), Box<dyn std::error::Error>> {
         let local_board = self.local_board.clone();
         // 在事件监听器内部创建新的 Receiver
@@ -247,6 +304,13 @@ impl BoardSyncManager {
     }
 
     /// 处理单个事件
+    ///
+    /// 根据事件类型更新本地画板数据
+    ///
+    /// # 参数
+    ///
+    /// * `local_board` - 本地画板引用
+    /// * `event` - 要处理的事件
     async fn process_event(local_board: &Arc<RwLock<LocalBoard>>, event: Event) {
         match event {
             Event::OwnPaintEvent { pos, color } => {
@@ -279,6 +343,8 @@ impl BoardSyncManager {
     }
 
     /// 应用缓存的事件
+    ///
+    /// 将在同步期间缓存的事件应用到本地画板数据
     async fn apply_pending_events(&self) {
         let pending_events = {
             let mut pending = self.pending_events.lock().await;
@@ -294,6 +360,13 @@ impl BoardSyncManager {
     }
 
     /// 停止同步管理器
+    ///
+    /// 停止所有同步任务并清理资源
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(())` - 成功停止同步管理器
+    /// * `Err` - 停止过程中发生错误
     pub async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
         {
             let mut should_stop = self.should_stop.write().await;

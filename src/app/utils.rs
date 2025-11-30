@@ -1,10 +1,26 @@
+//! 应用程序实用工具模块
+//!
+//! 该模块包含各种实用函数，如获取认证Token、验证认证参数等。
+
 use log::info;
 use winter_paintboard_sdk::{config::Config, get_global_client, PaintboardClientTrait};
 
 use winter_paintboard_sdk::Rgb;
 use color_eyre::Report;
 
-/// Gets a token using UID and access key
+/// 通过访问密钥获取认证 Token
+///
+/// 使用用户ID和访问密钥向服务器请求认证Token
+///
+/// # 参数
+///
+/// * `uid` - 用户ID
+/// * `access_key` - 访问密钥
+///
+/// # 返回值
+///
+/// * `Ok(String)` - 成功获取的认证Token
+/// * `Err` - 获取过程中发生错误
 pub async fn get_token_with_access_key(
     uid: u32,
     access_key: &str,
@@ -17,7 +33,19 @@ pub async fn get_token_with_access_key(
     Ok(token)
 }
 
-/// Validates that either token or access key is provided
+/// 验证认证参数
+///
+/// 验证提供的Token和访问密钥参数是否有效
+///
+/// # 参数
+///
+/// * `token` - 可选的认证Token
+/// * `access_key` - 可选的访问密钥
+///
+/// # 返回值
+///
+/// * `Ok(String)` - 验证通过的Token
+/// * `Err` - 验证失败的原因
 pub fn validate_auth_args(
     token: &Option<String>,
     access_key: &Option<String>,
@@ -42,7 +70,20 @@ pub fn validate_auth_args(
     Err("必须提供 --token 或 --access-key")
 }
 
-/// 处理认证参数，返回有效的token
+/// 解析认证Token，如果提供了访问密钥则自动获取Token
+///
+/// 根据提供的参数解析出有效的认证Token，如果只提供了访问密钥则自动获取Token
+///
+/// # 参数
+///
+/// * `token` - 可选的预获取Token
+/// * `uid` - 用户ID
+/// * `access_key` - 可选的访问密钥
+///
+/// # 返回值
+///
+/// * `Ok(String)` - 解析出的有效Token
+/// * `Err` - 解析过程中发生错误
 pub async fn resolve_auth_token(
     token: Option<String>,
     uid: u32,

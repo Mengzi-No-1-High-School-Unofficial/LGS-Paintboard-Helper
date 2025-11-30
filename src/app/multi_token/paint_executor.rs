@@ -1,3 +1,8 @@
+//! 绘制执行器模块
+//!
+//! 该模块实现了绘制请求的队列管理和执行功能，包括请求队列、
+//! 绘制执行器和相关的处理逻辑。
+
 use clap::error;
 use color_eyre::Report;
 use log::{debug, error, info, warn};
@@ -19,12 +24,21 @@ use winter_paintboard_sdk::{
 };
 
 /// 绘制请求队列
+///
+/// 管理绘制请求的发送和接收，使用无界通道实现
 pub struct PaintRequestQueue {
+    /// 发送端
     sender: mpsc::UnboundedSender<PaintRequest>,
+    /// 接收端
     receiver: Arc<Mutex<mpsc::UnboundedReceiver<PaintRequest>>>,
 }
 
 impl PaintRequestQueue {
+    /// 创建新的绘制请求队列
+    ///
+    /// # 返回值
+    ///
+    /// 返回初始化的绘制请求队列实例
     pub fn new() -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
         Self {
@@ -33,12 +47,27 @@ impl PaintRequestQueue {
         }
     }
 
+    /// 发送绘制请求
+    ///
+    /// # 参数
+    ///
+    /// * `request` - 绘制请求
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(())` - 发送成功
+    /// * `Err` - 发送失败及错误信息
     pub fn send(&self, request: PaintRequest) -> Result<(), String> {
         self.sender
             .send(request)
             .map_err(|e| format!("发送绘制请求失败: {}", e))
     }
 
+    /// 接收绘制请求
+    ///
+    /// # 返回值
+    ///
+    /// 返回接收到的绘制请求（如果存在）
     pub async fn recv(&self) -> Option<PaintRequest> {
         let mut receiver = self.receiver.lock().await;
         receiver.recv().await
@@ -46,16 +75,36 @@ impl PaintRequestQueue {
 }
 
 /// 单线程绘制执行器
+///
+/// 负责执行绘制请求，与服务器通信并将结果更新到本地画板
 #[derive(Clone)]
 pub struct PaintExecutor {
+    /// 异步客户端
     client: Arc<AsyncClient>,
+    /// 绘制请求队列
     request_queue: Arc<PaintRequestQueue>,
+    /// 本地画板引用
     local_board: Arc<RwLock<LocalBoard>>,
+    /// 本地绘制历史记录
     local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
+    /// 本地绘制总数
     local_paint_total: Arc<AtomicU64>,
 }
 
 impl PaintExecutor {
+    /// 创建新的绘制执行器
+    ///
+    /// # 参数
+    ///
+    /// * `client` - 异步客户端
+    /// * `request_queue` - 绘制请求队列
+    /// * `local_board` - 本地画板引用
+    /// * `local_paint_history` - 本地绘制历史记录
+    /// * `local_paint_total` - 本地绘制总数
+    ///
+    /// # 返回值
+    ///
+    /// 返回初始化的绘制执行器实例
     pub fn new(
         client: Arc<AsyncClient>,
         request_queue: Arc<PaintRequestQueue>,
@@ -73,6 +122,12 @@ impl PaintExecutor {
     }
 
     /// 启动执行循环
+    ///
+    /// 启动绘制执行循环，持续处理队列中的绘制请求直到收到停止信号
+    ///
+    /// # 参数
+    ///
+    /// * `stop_signal` - 停止信号
     pub async fn run(&self, stop_signal: Arc<AtomicBool>) {
         info!("PaintExecutor 启动");
 
@@ -94,6 +149,12 @@ impl PaintExecutor {
     }
 
     /// 处理单个绘制请求
+    ///
+    /// 执行具体的绘制操作，处理结果并更新本地数据
+    ///
+    /// # 参数
+    ///
+    /// * `request` - 绘制请求
     async fn process_request(&self, mut request: PaintRequest) {
         debug!(
             "处理绘制请求: ({}, {}), token_uid: {}",
@@ -207,6 +268,13 @@ impl PaintExecutor {
     }
 }
 
+/// 记录成功绘制事件
+///
+/// 更新指标中的成功绘制统计
+///
+/// # 参数
+///
+/// * `request` - 绘制请求
 async fn record_success_paint(request: &PaintRequest) {
     let metrics = Metrics::get_instance();
     if let Err(e) = metrics {
@@ -220,6 +288,13 @@ async fn record_success_paint(request: &PaintRequest) {
     }
 }
 
+/// 记录失败绘制事件
+///
+/// 更新指标中的失败绘制统计
+///
+/// # 参数
+///
+/// * `request` - 绘制请求
 async fn record_failed_paint(request: &PaintRequest) {
     let metrics = Metrics::get_instance();
     if let Err(e) = metrics {

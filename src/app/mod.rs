@@ -1,3 +1,8 @@
+//! 应用程序主模块
+//!
+//! 该模块包含应用程序的核心逻辑，处理命令行参数并根据不同的子命令执行相应的功能。
+//! 主要功能包括多Token绘制模式、获取画板状态和显示项目信息。
+
 pub mod board_sync;
 pub mod cli;
 pub mod export;
@@ -20,7 +25,21 @@ use crate::app::{
 
 use crate::app::cli::Commands;
 
-/// Main application logic for drawing an image to the paintboard
+/// 运行应用程序的主逻辑
+///
+/// 根据命令行参数解析出的子命令执行相应的功能：
+/// - GetBoard: 获取当前画板状态
+/// - About: 显示项目信息和作者信息
+/// - MultiToken: 启动多Token绘制模式
+///
+/// # 参数
+///
+/// * `cli` - 解析后的命令行参数结构体
+///
+/// # 返回值
+///
+/// * `Ok(())` - 程序正常执行完成
+/// * `Err` - 执行过程中发生错误
 pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::GetBoard {
@@ -81,7 +100,34 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-/// 运行多 Token 模式
+/// 运行多 Token 绘制模式
+///
+/// 该模式使用多个用户 Token 并发绘制图像，通过网格图算法优化绘制优先级，
+/// 并支持本地画板同步、绘制结果导出等功能。
+///
+/// # 参数
+///
+/// * `config_path` - Token 配置文件路径
+/// * `ws_url` - WebSocket 服务器 URL（可选）
+/// * `image` - 要绘制的图像文件路径
+/// * `x` - 绘制起始 X 坐标
+/// * `y` - 绘制起始 Y 坐标
+/// * `width` - 图像宽度（可选，用于缩放）
+/// * `height` - 图像高度（可选，用于缩放）
+/// * `cd_time` - Token 冷却时间（毫秒）
+/// * `comparison_interval` - 画板状态比对间隔（毫秒）
+/// * `enable_export` - 是否启用画板导出功能
+/// * `enable_heatmap_export` - 是否启用热点图导出功能
+/// * `export_dir` - 导出目录路径
+/// * `export_interval` - 导出时间间隔（秒）
+/// * `canny_low_thresh` - 网格图算法低阈值
+/// * `canny_high_thresh` - 网格图算法高阈值
+/// * `penalty_scale` - 惩罚系数，用于避免重复绘制同一位置
+///
+/// # 返回值
+///
+/// * `Ok(())` - 多 Token 模式正常执行完成
+/// * `Err` - 执行过程中发生错误
 pub async fn run_multi_token_mode(
     config_path: PathBuf,
     ws_url: Option<String>,
@@ -200,6 +246,23 @@ pub async fn run_multi_token_mode(
     Ok(())
 }
 
+/// 运行获取画板状态模式
+///
+/// 该模式用于获取当前画板的状态，包括画板尺寸和像素数据。
+/// 可以将结果输出到控制台或保存到文件。
+///
+/// # 参数
+///
+/// * `token` - 用户认证 Token（可选）
+/// * `uid` - 用户 ID
+/// * `access_key` - 访问密钥（可选）
+/// * `api_url` - API 服务器 URL（可选）
+/// * `output` - 输出文件路径（可选）
+///
+/// # 返回值
+///
+/// * `Ok(())` - 成功获取画板状态
+/// * `Err` - 获取过程中发生错误
 async fn run_get_board_mode(
     token: Option<String>,
     uid: u32,
@@ -258,6 +321,14 @@ async fn run_get_board_mode(
     Ok(())
 }
 
+/// 运行关于模式
+///
+/// 显示项目的基本信息，包括版本号、作者信息、GitHub 链接和许可证信息。
+///
+/// # 返回值
+///
+/// * `Ok(())` - 成功显示项目信息
+/// * `Err` - 显示过程中发生错误
 async fn run_about_mode() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         r#"

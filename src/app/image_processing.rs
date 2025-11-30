@@ -1,3 +1,8 @@
+//! 图像处理模块
+//!
+//! 该模块负责将输入的图像文件转换为画板绘制操作序列，包括图像缩放、
+//! 坐标映射和网格图算法优先级计算等功能。
+
 use color_eyre::Report;
 use image::{imageops::FilterType, open, GrayImage, RgbaImage};
 use imageproc::edges::{self, canny};
@@ -5,18 +10,38 @@ use imageproc::filter::gaussian_blur_f32;
 use log::{debug, info};
 use rustc_hash::FxHashMap;
 
-/// Represents processed image data for different scale factors
+/// 表示处理后的图像数据，用于不同缩放级别的绘制操作
+///
+/// 包含原始图像尺寸、完整尺寸的绘制操作序列、多级缩放的绘制操作序列
+/// 以及通过网格图算法计算出的像素优先级映射
 #[derive(Clone)]
 pub struct ProcessedImageData {
+    /// 原始图像的宽度
     pub img_width: u32,
+    /// 原始图像的高度
     pub img_height: u32,
+    /// 完整尺寸的绘制操作序列，包含位置和颜色信息
     pub full_scale_operations: Vec<(winter_paintboard_sdk::Pos, winter_paintboard_sdk::Rgb)>,
+    /// 不同缩放级别的绘制操作序列，用于渐进式绘制
     pub scale_level_operations: Vec<Vec<(winter_paintboard_sdk::Pos, winter_paintboard_sdk::Rgb)>>,
-    /// Canny 边缘检测计算出的像素优先级 (边缘高优先级)
+    /// 网格图算法计算出的像素优先级映射，优先级值越高表示越重要
     pub pixel_canny_priorities: FxHashMap<winter_paintboard_sdk::Pos, f64>,
 }
 
-/// Reads and resizes an image from the given path
+/// 从指定路径读取并缩放图像
+///
+/// 根据可选的宽度和高度参数缩放图像，使用三角滤波器以获得平滑效果
+///
+/// # 参数
+///
+/// * `image_path` - 图像文件路径
+/// * `width` - 目标宽度（可选）
+/// * `height` - 目标高度（可选）
+///
+/// # 返回值
+///
+/// * `Ok(RgbaImage)` - 成功读取并缩放的RGBA图像
+/// * `Err` - 读取或处理过程中发生错误
 pub fn read_and_resize_image(
     image_path: &std::path::Path,
     width: Option<u32>,
@@ -43,7 +68,24 @@ pub fn read_and_resize_image(
     Ok(img.into_rgba8())
 }
 
-/// Processes an image at multiple scale factors to prepare drawing operations
+/// 在多个缩放级别处理图像以准备绘制操作
+///
+/// 将图像处理为多个缩放级别，计算网格图算法优先级，并生成对应的绘制操作序列
+///
+/// # 参数
+///
+/// * `image_path` - 输入图像文件路径
+/// * `width` - 目标宽度（可选）
+/// * `height` - 目标高度（可选）
+/// * `start_x` - 绘制起始X坐标
+/// * `start_y` - 绘制起始Y坐标
+/// * `canny_low_thresh` - 网格图算法低阈值
+/// * `canny_high_thresh` - 网格图算法高阈值
+///
+/// # 返回值
+///
+/// * `Ok(ProcessedImageData)` - 处理后的图像数据结构
+/// * `Err` - 处理过程中发生错误
 pub fn process_image_at_all_scales(
     image_path: &std::path::Path,
     width: Option<u32>,
@@ -108,7 +150,21 @@ pub fn process_image_at_all_scales(
     })
 }
 
-/// Prepares draw operations from an RGBA image with coordinates mapping
+/// 将RGBA图像转换为绘制操作序列，包含坐标映射
+///
+/// 遍历图像的每个像素，将其转换为画板位置和颜色的元组，
+/// 同时处理透明度和边界检查
+///
+/// # 参数
+///
+/// * `rgba_img` - 输入的RGBA图像
+/// * `start_x` - 绘制起始X坐标
+/// * `start_y` - 绘制起始Y坐标
+///
+/// # 返回值
+///
+/// * `Ok(Vec<(Pos, Rgb)>)` - 绘制操作序列
+/// * `Err` - 处理过程中发生错误
 fn prepare_draw_operations_with_coords(
     rgba_img: &RgbaImage,
     start_x: i32,
@@ -147,17 +203,19 @@ fn prepare_draw_operations_with_coords(
     Ok(draw_operations)
 }
 
-/// Applies Canny edge detection to an image and returns a map of pixel positions to their edge strength (priority).
+/// 对图像应用网格图算法并返回像素位置到优先级值的映射
 ///
-/// # Arguments
+/// 将输入图像转换为灰度图，应用网格图算法检测边缘，并将边缘强度作为像素优先级
 ///
-/// * `rgba_img` - The input RGBA image.
-/// * `low_thresh` - The low threshold for the hysteresis procedure in Canny.
-/// * `high_thresh` - The high threshold for the hysteresis procedure in Canny.
+/// # 参数
 ///
-/// # Returns
+/// * `rgba_img` - 输入的RGBA图像
+/// * `low_thresh` - 网格图算法的低阈值
+/// * `high_thresh` - 网格图算法的高阈值
 ///
-/// A `FxHashMap` where keys are `winter_paintboard_sdk::Pos` and values are `f64` representing the edge strength.
+/// # 返回值
+///
+/// 返回一个映射，键为画板位置，值为对应的优先级强度值
 pub fn apply_canny_edge_detection(
     rgba_img: &RgbaImage,
     low_thresh: f32,

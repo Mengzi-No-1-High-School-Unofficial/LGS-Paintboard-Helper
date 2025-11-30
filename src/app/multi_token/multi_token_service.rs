@@ -1,3 +1,8 @@
+//! 多Token服务模块
+//!
+//! 该模块实现了多Token并发绘制的核心服务，包括任务调度、像素队列管理、
+//! Token管理、绘制执行等功能，使用网格图算法优化绘制优先级。
+
 use color_eyre::eyre::Ok;
 use color_eyre::Report;
 use log::{debug, error, info, warn};
@@ -21,26 +26,61 @@ use crate::app::utils::get_token_with_access_key;
 use winter_paintboard_sdk::{basic_client::AsyncClient, config::Config, PaintboardClientTrait};
 
 /// 多 Token 绘制服务
+///
+/// 核心服务类，管理多个Token的并发绘制任务，包括像素队列、工作线程、
+/// 绘制执行器和比对循环等组件
 pub struct MultiTokenService {
+    /// Token工作线程句柄列表
     workers: Vec<tokio::task::JoinHandle<()>>,
+    /// 绘制执行器线程句柄
     executor_handle: Option<tokio::task::JoinHandle<()>>,
+    /// 比对循环线程句柄
     comparison_handle: Option<tokio::task::JoinHandle<()>>,
+    /// 指标打印线程句柄
     metrics_handle: Option<tokio::task::JoinHandle<()>>,
+    /// 像素队列，用于存储待绘制的像素
     pixel_queue: Arc<PixelQueue>,
+    /// 本地画板的共享引用
     local_board: Arc<RwLock<LocalBoard>>,
+    /// 本地绘制历史记录，用于惩罚机制
     local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
+    /// 本地绘制总数，用于惩罚机制
     local_paint_total: Arc<AtomicU64>,
+    /// 目标图像数据
     target_image: ProcessedImageData,
+    /// 绘制起始X坐标
     start_x: i32,
+    /// 绘制起始Y坐标
     start_y: i32,
+    /// 停止信号，用于控制服务停止
     stop_signal: Arc<AtomicBool>,
+    /// 比对间隔时间
     comparison_interval: Duration,
+    /// Token管理器
     token_manager: Arc<TokenManager>,
+    /// 共享客户端
     shared_client: Arc<AsyncClient>,
 }
 
 impl MultiTokenService {
     /// 创建新的多 Token 服务
+    ///
+    /// 使用默认的网格图算法阈值创建服务实例
+    ///
+    /// # 参数
+    ///
+    /// * `token_config` - Token配置
+    /// * `ws_url` - WebSocket URL（可选）
+    /// * `local_board` - 本地画板引用
+    /// * `target_image` - 目标图像数据
+    /// * `start_x` - 起始X坐标
+    /// * `start_y` - 起始Y坐标
+    /// * `comparison_interval` - 比对间隔时间
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(MultiTokenService)` - 成功创建的服务实例
+    /// * `Err` - 创建过程中发生错误
     pub async fn new(
         token_config: TokenConfig,
         ws_url: Option<String>,
@@ -64,7 +104,24 @@ impl MultiTokenService {
         .await
     }
 
-    /// 创建新的多 Token 服务，支持配置 Canny 边缘检测阈值
+    /// 创建新的多 Token 服务，支持配置网格图算法阈值
+    ///
+    /// # 参数
+    ///
+    /// * `token_config` - Token配置
+    /// * `ws_url` - WebSocket URL（可选）
+    /// * `local_board` - 本地画板引用
+    /// * `target_image` - 目标图像数据
+    /// * `start_x` - 起始X坐标
+    /// * `start_y` - 起始Y坐标
+    /// * `comparison_interval` - 比对间隔时间
+    /// * `canny_low_thresh` - 网格图算法低阈值
+    /// * `canny_high_thresh` - 网格图算法高阈值
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(MultiTokenService)` - 成功创建的服务实例
+    /// * `Err` - 创建过程中发生错误
     pub async fn with_canny_thresholds(
         token_config: TokenConfig,
         ws_url: Option<String>,
@@ -120,6 +177,13 @@ impl MultiTokenService {
     }
 
     /// 启动服务
+    ///
+    /// 启动所有组件，包括绘制执行器、Token工作线程和比对循环
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(())` - 成功启动服务
+    /// * `Err` - 启动过程中发生错误
     pub async fn start(&mut self) -> Result<(), Report> {
         info!(
             "启动多 Token 绘制服务，Token 数量: {}",
@@ -195,6 +259,13 @@ impl MultiTokenService {
     }
 
     /// 停止服务
+    ///
+    /// 停止所有运行的组件并清理资源
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(())` - 成功停止服务
+    /// * `Err` - 停止过程中发生错误
     pub async fn stop(&mut self) -> Result<(), Report> {
         info!("正在停止多 Token 服务...");
 
@@ -220,6 +291,20 @@ impl MultiTokenService {
     }
 
     /// 运行比对循环
+    ///
+    /// 定期比较本地画板与目标图像，将差异像素添加到绘制队列
+    ///
+    /// # 参数
+    ///
+    /// * `pixel_queue` - 像素队列
+    /// * `local_board` - 本地画板引用
+    /// * `target_image` - 目标图像数据
+    /// * `start_x` - 起始X坐标
+    /// * `start_y` - 起始Y坐标
+    /// * `interval_duration` - 比对间隔时间
+    /// * `stop_signal` - 停止信号
+    /// * `local_paint_history` - 本地绘制历史
+    /// * `local_paint_total` - 本地绘制总数
     async fn run_comparison_loop(
         pixel_queue: Arc<PixelQueue>,
         local_board: Arc<RwLock<LocalBoard>>,
@@ -310,6 +395,18 @@ impl MultiTokenService {
         }
     }
 
+    /// 从Token条目获取Token
+    ///
+    /// 根据Token条目中的信息获取实际的Token，可能是直接提供或通过访问密钥获取
+    ///
+    /// # 参数
+    ///
+    /// * `entry` - Token条目
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(String)` - 获取到的Token
+    /// * `Err` - 获取过程中发生错误
     async fn get_token_from_entry(entry: &TokenEntry) -> Result<String, Report> {
         let token = match (entry.uid, entry.access_key.clone(), entry.token.clone()) {
             (uid, Some(access_key), None) => {
@@ -339,9 +436,20 @@ impl MultiTokenService {
 
     /// 将 [`TokenConfig`] 中的所有 [`TokenEntry`] 解析为 [`TokenInfo`] 列表
     ///
+    /// 从配置中获取所有Token信息，包括通过访问密钥获取的Token
+    ///
     /// # Note
     ///
     /// 不应为该函数增加异步并行操作，否则会触发 429 Rate Limit 错误
+    ///
+    /// # 参数
+    ///
+    /// * `token_config` - Token配置
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(Vec<TokenInfo>)` - Token信息列表
+    /// * `Err` - 获取过程中发生错误
     async fn fetch_tokens(token_config: &TokenConfig) -> Result<Vec<TokenInfo>, Report> {
         let mut tokens = Vec::new();
 
@@ -360,6 +468,14 @@ impl MultiTokenService {
         Ok(tokens)
     }
 
+    /// 打印指标循环
+    ///
+    /// 定期打印绘制指标，包括总绘制数、成功/失败数等
+    ///
+    /// # 参数
+    ///
+    /// * `token_manager` - Token管理器
+    /// * `stop_signal` - 停止信号
     async fn print_metrics_loop(token_manager: Arc<TokenManager>, stop_signal: Arc<AtomicBool>) {
         use crate::app::metrics::Metrics;
 
@@ -453,6 +569,15 @@ impl MultiTokenService {
         penalty
     }
 
+    /// 记录本地绘制操作
+    ///
+    /// 将绘制操作记录到历史中，用于惩罚机制计算
+    ///
+    /// # 参数
+    ///
+    /// * `pos` - 绘制位置
+    /// * `local_paint_history` - 本地绘制历史
+    /// * `local_paint_total` - 本地绘制总数
     pub async fn record_local_paint(
         pos: &Pos,
         local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
@@ -467,6 +592,14 @@ impl MultiTokenService {
         local_paint_total.fetch_add(1, Ordering::AcqRel);
     }
 
+    /// 移除旧的绘制历史记录
+    ///
+    /// 清理超过10分钟的绘制历史记录，保持历史记录的时效性
+    ///
+    /// # 参数
+    ///
+    /// * `local_paint_history` - 本地绘制历史
+    /// * `local_paint_total` - 本地绘制总数
     pub async fn remove_old_paint_histories(
         local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
         local_paint_total: Arc<AtomicU64>,

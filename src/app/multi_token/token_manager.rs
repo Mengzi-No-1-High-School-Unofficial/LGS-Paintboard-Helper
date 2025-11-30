@@ -1,19 +1,39 @@
+//! Token管理器模块
+//!
+//! 该模块实现了Token的管理和分配功能，包括Token状态跟踪、
+//! 冷却时间管理和并发安全的Token分配。
+
 use crate::app::multi_token::token_lease::{TokenData, TokenLease, TokenState};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Token 信息（保持兼容性）
+///
+/// 包含Token的基本信息和状态
 #[derive(Debug, Clone)]
 pub struct TokenInfo {
+    /// 用户ID
     pub uid: u32,
+    /// Token字符串
     pub token: String,
+    /// 最后绘制时间
     pub last_paint_time: Option<Instant>,
+    /// 是否可用
     pub is_available: bool,
 }
 
 impl TokenInfo {
     /// 创建新的 TokenInfo
+    ///
+    /// # 参数
+    ///
+    /// * `uid` - 用户ID
+    /// * `token` - Token字符串
+    ///
+    /// # 返回值
+    ///
+    /// 返回初始化的TokenInfo实例
     pub fn new(uid: u32, token: String) -> Self {
         Self {
             uid,
@@ -25,14 +45,27 @@ impl TokenInfo {
 }
 
 /// 非阻塞 Token 管理器
+///
+/// 管理多个Token的状态，包括可用性、冷却时间和分配
 #[derive(Clone)]
 pub struct TokenManager {
+    /// Token数据列表
     tokens: Arc<Mutex<Vec<TokenData>>>,
+    /// 冷却时间持续时间
     cd_duration: Duration,
 }
 
 impl TokenManager {
     /// 创建新的 TokenManager
+    ///
+    /// # 参数
+    ///
+    /// * `tokens` - Token信息列表
+    /// * `cd_time_ms` - 冷却时间（毫秒）
+    ///
+    /// # 返回值
+    ///
+    /// 返回初始化的TokenManager实例
     pub fn new(tokens: Vec<TokenInfo>, cd_time_ms: u64) -> Self {
         let token_data = tokens
             .into_iter()
@@ -51,6 +84,13 @@ impl TokenManager {
     }
 
     /// 非阻塞获取 Token
+    ///
+    /// 尝试获取一个可用的Token，如果存在可用Token则返回TokenLease，
+    /// 否则返回None
+    ///
+    /// # 返回值
+    ///
+    /// 返回可用Token的租约（如果存在）
     pub fn try_acquire(&self) -> Option<TokenLease> {
         let mut tokens = self.tokens.lock();
         let now = Instant::now();
@@ -85,6 +125,10 @@ impl TokenManager {
     }
 
     /// 获取下一个 Token 可用的最短等待时间
+    ///
+    /// # 返回值
+    ///
+    /// 返回下一个可用Token的最短等待时间（如果存在）
     pub fn next_available_in(&self) -> Option<Duration> {
         let tokens = self.tokens.lock();
         let now = Instant::now();
@@ -102,21 +146,41 @@ impl TokenManager {
     }
 
     /// 获取 Token 数量
+    ///
+    /// # 返回值
+    ///
+    /// 返回管理器中的Token总数
     pub fn len(&self) -> usize {
         self.tokens.lock().len()
     }
 
     /// 获取 CD 时间
+    ///
+    /// # 返回值
+    ///
+    /// 返回Token的冷却时间
     pub fn cd_duration(&self) -> Duration {
         self.cd_duration
     }
 
     /// 获取下一个 Token 可用的时间（兼容旧接口）
+    ///
+    /// # 返回值
+    ///
+    /// 返回下一个可用Token的等待时间（如果存在）
     pub fn next_available_time(&self) -> Option<Duration> {
         self.next_available_in()
     }
 
     /// 获取 Token 信息的引用（兼容旧接口）
+    ///
+    /// # 参数
+    ///
+    /// * `index` - Token索引
+    ///
+    /// # 返回值
+    ///
+    /// 返回指定索引的Token信息引用（如果存在）
     pub fn get_token(&self, index: usize) -> Option<&TokenInfo> {
         // 这里为了兼容性，返回一个临时的 TokenInfo
         // 实际使用中应该直接使用新接口
@@ -124,6 +188,10 @@ impl TokenManager {
     }
 
     /// 获取所有 Token 信息（兼容旧接口）
+    ///
+    /// # 返回值
+    ///
+    /// 返回所有Token信息的列表
     pub fn get_all_tokens(&self) -> Vec<TokenInfo> {
         let tokens = self.tokens.lock();
         tokens

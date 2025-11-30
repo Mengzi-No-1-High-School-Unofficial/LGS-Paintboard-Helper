@@ -1,19 +1,19 @@
-//! Main entry point for the Winter Paintboard Helper application
+//! 主入口点模块
 //!
-//! This application is a command-line tool for drawing images on the Luogu Paintboard.
-//! It supports multiple drawing modes including incremental, loop, and one-time drawing.
+//! 冬日绘板助手应用程序的主入口点，这是一个用于在洛谷绘板上绘制图像的命令行工具。
+//! 支持多种绘制模式，包括增量绘制、循环绘制和单次绘制。
 
 use clap::Parser;
 use tracing::info;
 use tracing_subscriber;
 
-/// Application module containing all the core functionality
+/// 应用程序模块，包含所有核心功能
 mod app;
 
 #[tokio::main]
-/// Main async function - entry point of the application
+/// 主异步函数 - 应用程序的入口点
 ///
-/// Initializes the tracing subscriber, parses command-line arguments, and starts the application
+/// 初始化跟踪订阅者，解析命令行参数，并启动应用程序
 async fn main() -> color_eyre::Result<()> {
     // Initialize color-eyre for better error reporting
     color_eyre::install()?;
