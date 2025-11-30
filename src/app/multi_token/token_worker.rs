@@ -78,7 +78,7 @@ impl TokenWorker {
             }
 
             // 1. 尝试获取 Token（非阻塞）
-            let mut token_lease = match self.token_manager.try_acquire() {
+            let mut token_lease = match self.token_manager.clone().try_acquire() {
                 Some(lease) => lease,
                 None => {
                     // 等待最短 CD
@@ -93,7 +93,7 @@ impl TokenWorker {
             };
 
             // 2. 获取像素任务
-            let pixel = match self.pixel_queue.try_pop().await {
+            let pixel = match self.pixel_queue.try_pop() {
                 Some(p) => p,
                 None => {
                     // 没有任务，释放 Token

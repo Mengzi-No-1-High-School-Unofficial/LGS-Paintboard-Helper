@@ -5,6 +5,7 @@
 
 use crate::app::multi_token::token_lease::{TokenData, TokenLease, TokenState};
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -47,10 +48,12 @@ impl TokenInfo {
 /// 非阻塞 Token 管理器
 ///
 /// 管理多个Token的状态，包括可用性、冷却时间和分配
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TokenManager {
     /// Token数据列表
     tokens: Arc<Mutex<Vec<TokenData>>>,
+    /// 可用Token索引队列
+    available_indices: Arc<Mutex<VecDeque<usize>>>,
     /// 冷却时间持续时间
     cd_duration: Duration,
 }
@@ -67,6 +70,7 @@ impl TokenManager {
     ///
     /// 返回初始化的TokenManager实例
     pub fn new(tokens: Vec<TokenInfo>, cd_time_ms: u64) -> Self {
+        let token_count = tokens.len();
         let token_data = tokens
             .into_iter()
             .map(|t| TokenData {
@@ -79,6 +83,7 @@ impl TokenManager {
 
         Self {
             tokens: Arc::new(Mutex::new(token_data)),
+            available_indices: Arc::new(Mutex::new((0..token_count).collect())),
             cd_duration: Duration::from_millis(cd_time_ms),
         }
     }
@@ -91,33 +96,38 @@ impl TokenManager {
     /// # 返回值
     ///
     /// 返回可用Token的租约（如果存在）
-    pub fn try_acquire(&self) -> Option<TokenLease> {
+    pub fn try_acquire(self: &Arc<Self>) -> Option<TokenLease> {
         let mut tokens = self.tokens.lock();
+        let mut available_indices = self.available_indices.lock();
         let now = Instant::now();
 
-        // 1. 更新 CD 状态
-        for token in tokens.iter_mut() {
+        // 1. 更新所有Token的CD状态，并将完成CD的Token索引加入队列
+        for (index, token) in tokens.iter_mut().enumerate() {
             if token.state == TokenState::InCooldown {
                 if let Some(end_time) = token.cd_end_time {
                     if now >= end_time {
                         token.state = TokenState::Available;
                         token.cd_end_time = None;
+                        if !available_indices.contains(&index) {
+                            available_indices.push_back(index);
+                        }
                     }
                 }
             }
         }
 
-        // 2. 查找可用 Token
-        for (index, token) in tokens.iter_mut().enumerate() {
-            if token.state == TokenState::Available {
-                token.state = TokenState::Acquired;
-                return Some(TokenLease::new(
-                    index,
-                    token.uid,
-                    token.token.clone(),
-                    Arc::clone(&self.tokens),
-                    self.cd_duration,
-                ));
+        // 2. 尝试从队列获取可用Token
+        if let Some(index) = available_indices.pop_front() {
+            if let Some(token) = tokens.get_mut(index) {
+                if token.state == TokenState::Available {
+                    token.state = TokenState::Acquired;
+                    return Some(TokenLease::new(
+                        index,
+                        token.uid,
+                        token.token.clone(),
+                        self.clone(),
+                    ));
+                }
             }
         }
 
@@ -143,6 +153,25 @@ impl TokenManager {
                 TokenState::Acquired => None,
             })
             .min()
+    }
+
+    /// 释放一个Token（由TokenLease调用）
+    pub(super) fn release(&self, index: usize, success: bool) {
+        let mut tokens = self.tokens.lock();
+        if let Some(token) = tokens.get_mut(index) {
+            if success {
+                token.state = TokenState::InCooldown;
+                token.cd_end_time = Some(Instant::now() + self.cd_duration);
+            } else {
+                token.state = TokenState::Available;
+                token.cd_end_time = None;
+                // 失败或未使用的Lease，立即将Token索引放回可用队列
+                let mut available_indices = self.available_indices.lock();
+                if !available_indices.contains(&index) {
+                    available_indices.push_back(index);
+                }
+            }
+        }
     }
 
     /// 获取 Token 数量

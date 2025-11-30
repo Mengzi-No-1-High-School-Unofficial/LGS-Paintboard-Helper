@@ -5,7 +5,7 @@
 
 use std::collections::BinaryHeap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use parking_lot::Mutex;
 
 use crate::app::multi_token::config::PriorityPixel;
 
@@ -37,8 +37,8 @@ impl PixelQueue {
     /// # 参数
     ///
     /// * `pixels` - 要添加的像素列表
-    pub async fn reset_and_push(&self, pixels: Vec<PriorityPixel>) {
-        let mut queue = self.queue.lock().await;
+    pub fn reset_and_push(&self, pixels: Vec<PriorityPixel>) {
+        let mut queue = self.queue.lock();
         queue.clear();
         for pixel in pixels {
             queue.push(pixel);
@@ -52,8 +52,8 @@ impl PixelQueue {
     /// # 返回值
     ///
     /// 返回优先级最高的像素（如果存在）
-    pub async fn try_pop(&self) -> Option<PriorityPixel> {
-        let mut queue = self.queue.lock().await;
+    pub fn try_pop(&self) -> Option<PriorityPixel> {
+        let mut queue = self.queue.lock();
         queue.pop()
     }
 
@@ -62,8 +62,8 @@ impl PixelQueue {
     /// # 返回值
     ///
     /// 返回队列中像素的数量
-    pub async fn len(&self) -> usize {
-        let queue = self.queue.lock().await;
+    pub fn len(&self) -> usize {
+        let queue = self.queue.lock();
         queue.len()
     }
 
@@ -72,8 +72,8 @@ impl PixelQueue {
     /// # 返回值
     ///
     /// 如果队列为空返回true，否则返回false
-    pub async fn is_empty(&self) -> bool {
-        let queue = self.queue.lock().await;
+    pub fn is_empty(&self) -> bool {
+        let queue = self.queue.lock();
         queue.is_empty()
     }
 
@@ -82,8 +82,8 @@ impl PixelQueue {
     /// # 返回值
     ///
     /// 返回队列中所有像素的排序列表
-    pub async fn get_all_pixels(&self) -> Vec<PriorityPixel> {
-        let queue = self.queue.lock().await;
+    pub fn get_all_pixels(&self) -> Vec<PriorityPixel> {
+        let queue = self.queue.lock();
         queue.clone().into_sorted_vec().into_iter().rev().collect()
     }
 
@@ -94,8 +94,8 @@ impl PixelQueue {
     /// # 参数
     ///
     /// * `new_pixels` - 要合并的新像素列表
-    pub async fn merge_updates(&self, new_pixels: Vec<PriorityPixel>) {
-        let mut queue = self.queue.lock().await;
+    pub fn merge_updates(&self, new_pixels: Vec<PriorityPixel>) {
+        let mut queue = self.queue.lock();
 
         // 创建现有像素的 HashMap（避免在重建期间的竞态条件）
         let mut pixel_map: std::collections::HashMap<

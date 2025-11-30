@@ -19,7 +19,7 @@ use super::local_board::{LocalBoard, PixelSource, SyncStatus};
 #[derive(Clone)]
 pub struct BoardSyncManager {
     /// 本地画板数据的Arc引用
-    local_board: Arc<RwLock<LocalBoard>>,
+    local_board: Arc<LocalBoard>,
     /// 事件总线，用于处理实时事件
     event_bus: Arc<winter_paintboard_sdk::event::EventBus>, // 使用EventBus而不是Receiver
     /// 停止标志，用于控制同步循环
@@ -42,7 +42,7 @@ impl BoardSyncManager {
     /// 返回初始化的同步管理器实例
     pub fn new(event_bus: &winter_paintboard_sdk::event::EventBus) -> Self {
         Self {
-            local_board: Arc::new(RwLock::new(LocalBoard::new(1000, 600))),
+            local_board: Arc::new(LocalBoard::new(1000, 600)),
             event_bus: Arc::new(event_bus.clone()),
             should_stop: Arc::new(RwLock::new(false)),
             sync_in_progress: Arc::new(RwLock::new(false)),
@@ -55,7 +55,7 @@ impl BoardSyncManager {
     /// # 返回值
     ///
     /// 返回指向本地画板数据的Arc引用
-    pub fn local_board(&self) -> Arc<RwLock<LocalBoard>> {
+    pub fn local_board(&self) -> Arc<LocalBoard> {
         self.local_board.clone()
     }
 
@@ -112,8 +112,8 @@ impl BoardSyncManager {
                     match client.get_board().await {
                         Ok(board_data) => {
                             {
-                                let mut board = sync_manager.local_board.write().await;
-                                board.update_from_board(&board_data).await;
+                                let board = sync_manager.local_board.clone();
+                                board.update_from_board(&board_data);
                                 board.set_sync_status(SyncStatus::Idle);
                                 info!(
                                     "全量同步完成，获取到 {} 个像素数据",
@@ -130,7 +130,7 @@ impl BoardSyncManager {
                                     max_retries, e
                                 );
                                 {
-                                    let mut board = sync_manager.local_board.write().await;
+                                    let board = sync_manager.local_board.clone();
                                     board.set_sync_status(SyncStatus::Error(e.to_string()));
                                 }
                             } else {
@@ -207,10 +207,10 @@ impl BoardSyncManager {
                 // 尝试获取服务器数据
                 match client.get_board().await {
                     Ok(board_data) => {
-                        let mut board = sync_manager.local_board.write().await;
+                        let board = sync_manager.local_board.clone();
 
                         // 执行差异同步（update_from_board 方法会进行实际的差异比较和更新）
-                        board.update_from_board(&board_data).await;
+                        board.update_from_board(&board_data);
 
                         // 验证同步后的数据一致性
                         if !board.verify_integrity() {
@@ -223,7 +223,7 @@ impl BoardSyncManager {
                     Err(e) => {
                         error!("增量同步失败: {:?}", e);
                         {
-                            let mut board = sync_manager.local_board.write().await;
+                            let board = sync_manager.local_board.clone();
                             board.set_sync_status(SyncStatus::Error(e.to_string()));
                         }
                     }
@@ -287,7 +287,7 @@ impl BoardSyncManager {
                         }
 
                         // 根据事件类型更新本地数据
-                        Self::process_event(&local_board, event).await;
+                        Self::process_event(&local_board, event);
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         error!("事件接收器已关闭");
@@ -311,21 +311,15 @@ impl BoardSyncManager {
     ///
     /// * `local_board` - 本地画板引用
     /// * `event` - 要处理的事件
-    async fn process_event(local_board: &Arc<RwLock<LocalBoard>>, event: Event) {
+    fn process_event(local_board: &Arc<LocalBoard>, event: Event) {
         match event {
             Event::OwnPaintEvent { pos, color } => {
                 // debug!("😊 处理自己的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
-                {
-                    let mut board = local_board.write().await;
-                    board.update_pixel(pos.x, pos.y, color, PixelSource::Own).await;
-                }
+                local_board.update_pixel(pos.x, pos.y, color, PixelSource::Own);
             }
             Event::OtherPaintEvent { pos, color } => {
                 // debug!("👀 处理他人的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
-                {
-                    let mut board = local_board.write().await;
-                    board.update_pixel(pos.x, pos.y, color, PixelSource::Other).await;
-                }
+                local_board.update_pixel(pos.x, pos.y, color, PixelSource::Other);
             }
             Event::HeartbeatEvent => {
                 debug!("收到心跳事件");
@@ -354,7 +348,7 @@ impl BoardSyncManager {
         if !pending_events.is_empty() {
             info!("应用 {} 个缓存的事件", pending_events.len());
             for event in pending_events {
-                Self::process_event(&self.local_board, event).await;
+                Self::process_event(&self.local_board, event);
             }
         }
     }

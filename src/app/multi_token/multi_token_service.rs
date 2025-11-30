@@ -10,9 +10,9 @@ use rustc_hash::FxHashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
 use tokio::time::{interval, sleep, Instant};
 use winter_paintboard_sdk::Pos;
+use parking_lot::RwLock;
 
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
@@ -41,7 +41,7 @@ pub struct MultiTokenService {
     /// 像素队列，用于存储待绘制的像素
     pixel_queue: Arc<PixelQueue>,
     /// 本地画板的共享引用
-    local_board: Arc<RwLock<LocalBoard>>,
+    local_board: Arc<LocalBoard>,
     /// 本地绘制历史记录，用于惩罚机制
     local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
     /// 本地绘制总数，用于惩罚机制
@@ -84,7 +84,7 @@ impl MultiTokenService {
     pub async fn new(
         token_config: TokenConfig,
         ws_url: Option<String>,
-        local_board: Arc<RwLock<LocalBoard>>,
+        local_board: Arc<LocalBoard>,
         target_image: ProcessedImageData,
         start_x: i32,
         start_y: i32,
@@ -125,7 +125,7 @@ impl MultiTokenService {
     pub async fn with_canny_thresholds(
         token_config: TokenConfig,
         ws_url: Option<String>,
-        local_board: Arc<RwLock<LocalBoard>>,
+        local_board: Arc<LocalBoard>,
         target_image: ProcessedImageData,
         start_x: i32,
         start_y: i32,
@@ -307,7 +307,7 @@ impl MultiTokenService {
     /// * `local_paint_total` - 本地绘制总数
     async fn run_comparison_loop(
         pixel_queue: Arc<PixelQueue>,
-        local_board: Arc<RwLock<LocalBoard>>,
+        local_board: Arc<LocalBoard>,
         target_image: ProcessedImageData,
         start_x: i32,
         start_y: i32,
@@ -327,18 +327,14 @@ impl MultiTokenService {
 
             debug!("开始比对绘版与目标图片...");
 
-            // 获取本地绘版数据
-            let local_pixels = {
-                let board = local_board.read().await;
-                if !board.is_initialized() {
-                    warn!("本地绘版未初始化，跳过比对");
-                    continue;
-                }
-                board.get_pixels().clone()
-            };
+            if !local_board.is_initialized() {
+                warn!("本地绘版未初始化，跳过比对");
+                continue;
+            }
 
             // 计算差异像素
             let mut differences = Vec::new();
+            let local_pixels = local_board.get_pixels();
             for (pos, target_color) in &target_image.full_scale_operations {
                 let x = pos.x as i32;
                 let y = pos.y as i32;
@@ -375,7 +371,7 @@ impl MultiTokenService {
                         255.0 // 缺少像素，最高优先级
                     };
 
-                    let priority = priority - Self::get_penalty_priority(pos, local_paint_history.clone(), local_paint_total.clone()).await;
+                    let priority = priority - Self::get_penalty_priority(pos, local_paint_history.clone(), local_paint_total.clone());
 
                     differences.push(PriorityPixel {
                         pos: *pos,
@@ -388,7 +384,7 @@ impl MultiTokenService {
             // 更新队列（增量合并）
             if !differences.is_empty() {
                 info!("检测到 {} 个像素差异，更新队列", differences.len());
-                pixel_queue.merge_updates(differences).await;
+                pixel_queue.merge_updates(differences);
             } else {
                 info!("未检测到像素差异");
             }
@@ -496,15 +492,14 @@ impl MultiTokenService {
             }
 
             let metrics = metrics.unwrap();
-            let metrics = metrics.read().await;
 
             info!("=== 全局绘制指标 ===");
-            info!("总绘制像素数: {}", metrics.global.total_painted_pixels);
+            info!("总绘制像素数: {}", metrics.global.total_painted_pixels.load(Ordering::Relaxed));
             info!(
                 "成功绘制像素数: {}",
-                metrics.global.successful_painted_pixels
+                metrics.global.successful_painted_pixels.load(Ordering::Relaxed)
             );
-            info!("失败绘制像素数: {}", metrics.global.failed_painted_pixels);
+            info!("失败绘制像素数: {}", metrics.global.failed_painted_pixels.load(Ordering::Relaxed));
             info!("===================");
 
             for token_info in token_manager.get_all_tokens() {
@@ -512,14 +507,14 @@ impl MultiTokenService {
                 let token_metrics = metrics.tokens.get(&uid);
 
                 if let Some(token_metrics) = token_metrics {
-                    let token_metrics = token_metrics.read().await;
+                    let token_metrics = token_metrics.value();
                     info!("--- Token UID: {} 指标 ---", uid);
-                    info!("总绘制像素数: {}", token_metrics.painted_pixels);
+                    info!("总绘制像素数: {}", token_metrics.painted_pixels.load(Ordering::Relaxed));
                     info!(
                         "成功绘制像素数: {}",
-                        token_metrics.successful_painted_pixels
+                        token_metrics.successful_painted_pixels.load(Ordering::Relaxed)
                     );
-                    info!("失败绘制像素数: {}", token_metrics.failed_painted_pixels);
+                    info!("失败绘制像素数: {}", token_metrics.failed_painted_pixels.load(Ordering::Relaxed));
                     info!(
                         "绘制速率 (像素/分钟): {:.2}",
                         token_metrics.get_recent_paint_rate()
@@ -544,12 +539,12 @@ impl MultiTokenService {
     /// 
     /// 其中，`最小总绘画数`、`惩罚系数`是常量，可被外部配置文件调整。
     /// 含义为，根据该像素调用占比占所有绘制调用的占比和 Canny 算法值决定优先级
-    pub async fn get_penalty_priority(
+    pub fn get_penalty_priority(
         pos: &Pos,
         local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
         local_paint_total: Arc<AtomicU64>,
     ) -> f64 {
-        let local_paint_history = local_paint_history.read().await;
+        let local_paint_history = local_paint_history.read();
         let histories = local_paint_history.get(pos);
 
         if histories.is_none() {
@@ -578,13 +573,13 @@ impl MultiTokenService {
     /// * `pos` - 绘制位置
     /// * `local_paint_history` - 本地绘制历史
     /// * `local_paint_total` - 本地绘制总数
-    pub async fn record_local_paint(
+    pub fn record_local_paint(
         pos: &Pos,
         local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
         local_paint_total: Arc<AtomicU64>,
     ) {
         {
-            let mut local_paint_history = local_paint_history.write().await;
+            let mut local_paint_history = local_paint_history.write();
             let histories = local_paint_history.entry(*pos).or_insert_with(Vec::new);
             histories.push(Instant::now());
         }
@@ -600,11 +595,11 @@ impl MultiTokenService {
     ///
     /// * `local_paint_history` - 本地绘制历史
     /// * `local_paint_total` - 本地绘制总数
-    pub async fn remove_old_paint_histories(
+    pub fn remove_old_paint_histories(
         local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
         local_paint_total: Arc<AtomicU64>,
     ) {
-        let mut local_paint_history = local_paint_history.write().await;
+        let mut local_paint_history = local_paint_history.write();
 
         for (_pos, histories) in local_paint_history.iter_mut() {
             let count_before = histories.len();

@@ -1391,6 +1391,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "console-subscriber",
+ "dashmap",
  "env_logger",
  "image",
  "imageproc",

@@ -11,9 +11,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use tokio::time::Instant;
 use winter_paintboard_sdk::Pos;
+use parking_lot::RwLock;
 
 use super::paint_request::PaintRequest;
 use crate::app::board_sync::local_board::{LocalBoard, PixelSource};
@@ -84,7 +85,7 @@ pub struct PaintExecutor {
     /// 绘制请求队列
     request_queue: Arc<PaintRequestQueue>,
     /// 本地画板引用
-    local_board: Arc<RwLock<LocalBoard>>,
+    local_board: Arc<LocalBoard>,
     /// 本地绘制历史记录
     local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
     /// 本地绘制总数
@@ -108,7 +109,7 @@ impl PaintExecutor {
     pub fn new(
         client: Arc<AsyncClient>,
         request_queue: Arc<PaintRequestQueue>,
-        local_board: Arc<RwLock<LocalBoard>>,
+        local_board: Arc<LocalBoard>,
         local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
         local_paint_total: Arc<AtomicU64>,
     ) -> Self {
@@ -199,37 +200,32 @@ impl PaintExecutor {
                 match paint_result.status {
                     PaintStatus::Success => {
                         // 更新本地绘版
-                        {
-                            let mut board = self.local_board.write().await;
-                            board.update_pixel(
-                                request.pixel.pos.x,
-                                request.pixel.pos.y,
-                                request.pixel.color,
-                                PixelSource::Own,
-                            ).await;
+                        self.local_board.update_pixel(
+                            request.pixel.pos.x,
+                            request.pixel.pos.y,
+                            request.pixel.color,
+                            PixelSource::Own,
+                        );
 
-                            info!(
-                                "成功在 ({}, {}) 使用 Token {} 绘制像素（优先级 {}）",
+                        info!(
+                            "成功在 ({}, {}) 使用 Token {} 绘制像素（优先级 {}）",
                                 request.pixel.pos.x,
                                 request.pixel.pos.y,
                                 request.token_lease.uid(),
                                 request.pixel.priority
                             );
-                        }
 
                         record_success_paint(&request).await;
                         MultiTokenService::record_local_paint(
                             &request.pixel.pos,
                             self.local_paint_history.clone(),
                             self.local_paint_total.clone(),
-                        )
-                        .await;
+                        );
 
                         MultiTokenService::remove_old_paint_histories(
                             self.local_paint_history.clone(),
                             self.local_paint_total.clone(),
-                        )
-                        .await;
+                        );
 
                         // 标记成功，启动 CD
                         request.token_lease.mark_success();
@@ -281,10 +277,7 @@ async fn record_success_paint(request: &PaintRequest) {
         error!("获取全局指标存储失败: {:?}", e);
     } else {
         let metrics = metrics.unwrap();
-        let mut metrics = metrics.write().await;
-        metrics
-            .record_global_paint_success(request.token_lease.uid(), request.pixel.pos)
-            .await;
+        metrics.record_global_paint_success(request.token_lease.uid(), request.pixel.pos);
     }
 }
 
@@ -301,9 +294,6 @@ async fn record_failed_paint(request: &PaintRequest) {
         error!("获取全局指标存储失败: {:?}", e);
     } else {
         let metrics = metrics.unwrap();
-        let mut metrics = metrics.write().await;
-        metrics
-            .record_global_paint_failure(request.token_lease.uid(), request.pixel.pos)
-            .await;
+        metrics.record_global_paint_failure(request.token_lease.uid(), request.pixel.pos);
     }
 }

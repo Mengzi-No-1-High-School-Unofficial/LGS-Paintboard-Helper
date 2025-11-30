@@ -3,6 +3,7 @@
 //! 该模块实现了Token的RAII租约管理，确保Token的正确分配和释放，
 //! 包括状态跟踪和冷却时间管理。
 
+use super::token_manager::TokenManager;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -32,11 +33,9 @@ pub struct TokenLease {
     /// Token字符串
     token: String,
     /// Token管理器引用
-    manager: Arc<Mutex<Vec<TokenData>>>,
-    /// 冷却时间持续时间
-    cd_duration: Duration,
-    /// 是否已消费（防止重复消费）
-    consumed: bool,
+    manager: Arc<TokenManager>,
+    /// 是否成功消费
+    success: bool,
 }
 
 impl TokenLease {
@@ -53,30 +52,13 @@ impl TokenLease {
     /// # 返回值
     ///
     /// 返回初始化的TokenLease实例
-    pub fn new(
-        index: usize,
-        uid: u32,
-        token: String,
-        manager: Arc<Mutex<Vec<TokenData>>>,
-        cd_duration: Duration,
-    ) -> Self {
-        // 网络延迟问题
-        // let cd_duration = Duration::from_millis(
-        //     (cd_duration.as_millis() + 300).try_into().unwrap_or(
-        //         cd_duration
-        //             .as_millis()
-        //             .try_into()
-        //             .expect("这个错误理论上不可能发生"),
-        //     ),
-        // );
-
+    pub fn new(index: usize, uid: u32, token: String, manager: Arc<TokenManager>) -> Self {
         Self {
             index,
             uid,
             token,
             manager,
-            cd_duration,
-            consumed: false,
+            success: false, // 默认失败，如果Lease被丢弃而未标记成功，则Token会立即返回池中
         }
     }
 
@@ -102,37 +84,20 @@ impl TokenLease {
     ///
     /// 将Token状态设置为冷却中，并记录冷却结束时间
     pub fn mark_success(&mut self) {
-        self.consumed = true;
-        let mut tokens = self.manager.lock();
-        if let Some(token) = tokens.get_mut(self.index) {
-            token.state = TokenState::InCooldown;
-            token.cd_end_time = Some(Instant::now() + self.cd_duration);
-        }
+        self.success = true;
     }
 
     /// 标记绘制失败，释放 Token
     ///
     /// 将Token状态设置为可用，使其可以被重新获取
     pub fn mark_failed(&mut self) {
-        self.consumed = true;
-        let mut tokens = self.manager.lock();
-        if let Some(token) = tokens.get_mut(self.index) {
-            token.state = TokenState::Available;
-        }
+        self.success = false;
     }
 }
 
 impl Drop for TokenLease {
     fn drop(&mut self) {
-        if !self.consumed {
-            // 未消费，默认释放
-            let mut tokens = self.manager.lock();
-            if let Some(token) = tokens.get_mut(self.index) {
-                if token.state == TokenState::Acquired {
-                    token.state = TokenState::Available;
-                }
-            }
-        }
+        self.manager.release(self.index, self.success);
     }
 }
 

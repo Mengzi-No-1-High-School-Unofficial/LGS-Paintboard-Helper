@@ -8,7 +8,6 @@ use log::{error, info, warn};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 
 use crate::app::board_sync::{BoardSyncManager, LocalBoard};
@@ -17,7 +16,7 @@ use crate::app::board_sync::{BoardSyncManager, LocalBoard};
 ///
 /// 负责将本地画板数据导出为图片文件，支持完整的画板状态和热点图导出
 pub struct ExportManager {
-    local_board: Arc<RwLock<LocalBoard>>,
+    local_board: Arc<LocalBoard>,
     export_dir: PathBuf,
     export_interval: Duration,
 }
@@ -35,7 +34,7 @@ impl ExportManager {
     ///
     /// 返回配置好的导出管理器实例
     pub fn new(
-        local_board: Arc<RwLock<LocalBoard>>,
+        local_board: Arc<LocalBoard>,
         export_dir: PathBuf,
         export_interval: Duration,
     ) -> Self {
@@ -70,7 +69,7 @@ impl ExportManager {
 
         // 获取本地绘版数据并导出为图片
         {
-            let board = self.local_board.read().await;
+            let board = &self.local_board;
 
             if !board.is_initialized() {
                 warn!("绘版数据尚未初始化，跳过本次导出");
@@ -120,7 +119,7 @@ impl ExportManager {
 
         // 获取本地绘版的热点图数据并导出为图片
         {
-            let board = self.local_board.read().await;
+            let board = &self.local_board;
 
             if !board.is_initialized() {
                 warn!("绘版数据尚未初始化，跳过本次导出");
@@ -132,7 +131,6 @@ impl ExportManager {
 
             // 读取热点图数据
             let heatmap = board.get_heatmap();
-            let heatmap_data = heatmap.read();
 
             // 遍历所有像素位置，根据热点图值设置颜色
             for y in 0..height {
@@ -140,7 +138,7 @@ impl ExportManager {
                     let pos = winter_paintboard_sdk::models::Pos::new(x, y).unwrap();
 
                     // 根据热点图值确定颜色强度
-                    let intensity = *heatmap_data.get(&pos).unwrap_or(&0);
+                    let intensity = heatmap.get(&pos).map(|v| *v).unwrap_or(0);
 
                     // 将强度值转换为颜色（强度越高越红）
                     let pixel = self.intensity_to_color(intensity);

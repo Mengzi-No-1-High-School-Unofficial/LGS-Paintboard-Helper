@@ -4,9 +4,10 @@
 //! 数据完整性验证等功能。
 
 use std::{sync::Arc, time::Duration};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use parking_lot::RwLock;
-use rustc_hash::FxHashMap;
+use dashmap::DashMap;
 use winter_paintboard_sdk::models::{Board, Pos, Rgb};
 
 use crate::app::multi_token::cli::get_penalty_scale;
@@ -37,27 +38,27 @@ pub struct PixelStatus {
     pub timestamp: std::time::SystemTime,
 }
 
-/// 本地画板数据结构，使用高性能HashMap存储
+/// 本地画板数据结构，使用 DashMap 存储
 ///
 /// 管理本地画板的像素数据、热力图、同步状态等信息
 #[derive(Debug)]
 pub struct LocalBoard {
-    /// 使用FxHashMap存储像素位置到状态的映射
-    pixels: FxHashMap<Pos, PixelStatus>,
+    /// 使用 DashMap 存储像素位置到状态的映射，支持高并发读写
+    pixels: DashMap<Pos, PixelStatus>,
     /// 热力图数据，用于记录像素被绘制的频率
-    heatmap: Arc<RwLock<FxHashMap<Pos, u32>>>,
+    heatmap: Arc<DashMap<Pos, u32>>,
     /// 最后同步时间
-    last_sync_time: Option<std::time::SystemTime>,
+    last_sync_time: RwLock<Option<std::time::SystemTime>>,
     /// 同步状态
-    sync_status: SyncStatus,
+    sync_status: RwLock<SyncStatus>,
     /// 是否已初始化
-    is_initialized: bool,
+    is_initialized: AtomicBool,
     /// 画板宽度
     width: u16,
     /// 画板高度
     height: u16,
     /// 版本号，用于跟踪数据更新
-    version: u64,
+    version: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -86,14 +87,14 @@ impl LocalBoard {
     /// 返回初始化的本地画板实例
     pub fn new(width: u16, height: u16) -> Self {
         Self {
-            pixels: FxHashMap::default(),
-            heatmap: Arc::new(RwLock::new(FxHashMap::default())),
-            last_sync_time: None,
-            sync_status: SyncStatus::Idle,
-            is_initialized: false,
+            pixels: DashMap::new(),
+            heatmap: Arc::new(DashMap::new()),
+            last_sync_time: RwLock::new(None),
+            sync_status: RwLock::new(SyncStatus::Idle),
+            is_initialized: AtomicBool::new(false),
             width,
             height,
-            version: 0,
+            version: AtomicU64::new(0),
         }
     }
 
@@ -105,13 +106,13 @@ impl LocalBoard {
     /// * `y` - 像素Y坐标
     /// * `color` - 像素颜色
     /// * `source` - 像素来源（自己绘制或他人绘制）
-    pub async fn update_pixel(&mut self, x: u16, y: u16, color: Rgb, source: PixelSource) {
+    pub fn update_pixel(&self, x: u16, y: u16, color: Rgb, source: PixelSource) {
         if x < self.width && y < self.height {
             let current_time = std::time::SystemTime::now();
-            let pos = Pos::new(x, y).expect("Invalid coordinates for Pos creation"); // Pos struct ensures valid coordinates
+            let pos = Pos::new(x, y).expect("Invalid coordinates for Pos creation");
 
             self.pixels.insert(
-                pos.clone(),
+                pos,
                 PixelStatus {
                     color,
                     source,
@@ -126,7 +127,7 @@ impl LocalBoard {
             //     *heatmap.entry(pos.clone()).or_insert(0) += 1;
             // }
 
-            self.version += 1;
+            self.version.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -154,7 +155,7 @@ impl LocalBoard {
     /// # 返回值
     ///
     /// 返回指向内部像素数据映射的引用
-    pub fn get_pixels(&self) -> &FxHashMap<Pos, PixelStatus> {
+    pub fn get_pixels(&self) -> &DashMap<Pos, PixelStatus> {
         &self.pixels
     }
 
@@ -163,7 +164,7 @@ impl LocalBoard {
     /// # 返回值
     ///
     /// 返回指向热力图数据的Arc引用
-    pub fn get_heatmap(&self) -> &Arc<RwLock<FxHashMap<Pos, u32>>> {
+    pub fn get_heatmap(&self) -> &Arc<DashMap<Pos, u32>> {
         &self.heatmap
     }
 
@@ -174,7 +175,7 @@ impl LocalBoard {
     /// # 参数
     ///
     /// * `board` - 服务器画板数据
-    pub async fn update_from_board(&mut self, board: &Board) {
+    pub fn update_from_board(&self, board: &Board) {
         // 全量更新时，服务器数据是绝对权威
         // 但不直接清空，而是对比并更新差异
 
@@ -184,7 +185,8 @@ impl LocalBoard {
         let mut removals = Vec::new();
 
         // 检查本地存在的像素是否与服务器数据一致，或是否在服务器范围内
-        for &pos in self.pixels.keys() {
+        for entry in self.pixels.iter() {
+            let pos = *entry.key();
             let x = pos.x;
             let y = pos.y;
             // 如果像素坐标在服务器画板范围内，则需要验证
@@ -192,17 +194,15 @@ impl LocalBoard {
                 if let Ok(server_pixel) = board.get_pixel(x, y) {
                     let server_color = Rgb::new(server_pixel.r, server_pixel.g, server_pixel.b);
                     // 如果本地存储的颜色与服务器不一致，则记录更新
-                    if let Some(local_pixel_status) = self.pixels.get(&pos) {
-                        if local_pixel_status.color != server_color {
-                            updates.push((
-                                pos,
-                                PixelStatus {
-                                    color: server_color,
-                                    source: PixelSource::Other, // 来自服务器的数据视为他人
-                                    timestamp: std::time::SystemTime::now(),
-                                },
-                            ));
-                        }
+                    if entry.value().color != server_color {
+                        updates.push((
+                            pos,
+                            PixelStatus {
+                                color: server_color,
+                                source: PixelSource::Other, // 来自服务器的数据视为他人
+                                timestamp: std::time::SystemTime::now(),
+                            },
+                        ));
                     }
                 } else {
                     // 如果无法从服务器获取像素数据，则记录为待删除
@@ -220,9 +220,9 @@ impl LocalBoard {
                 let pos = Pos::new(x, y).expect("Invalid coordinates during board iteration");
 
                 if let Ok(server_pixel) = board.get_pixel(x, y) {
-                    let server_color = Rgb::new(server_pixel.r, server_pixel.g, server_pixel.b);
-                    // 只记录不存在的像素为待添加
+                    // 只有当本地没有该像素时才添加
                     if !self.pixels.contains_key(&pos) {
+                        let server_color = Rgb::new(server_pixel.r, server_pixel.g, server_pixel.b);
                         additions.push((
                             pos,
                             PixelStatus {
@@ -236,39 +236,38 @@ impl LocalBoard {
             }
         }
 
-        // 记录更新前的版本，用于判断是否有实际更改
-        let original_version = self.version;
-        let has_changes = !updates.is_empty() || !additions.is_empty() || !removals.is_empty();
+        let updates_len = updates.len();
+        let additions_len = additions.len();
+        let removals_len = removals.len();
+        let has_changes = updates_len > 0 || additions_len > 0 || removals_len > 0;
 
         // 执行实际的更新操作
-        for (pos, new_status) in &updates {
-            // self.pixels.insert(pos.clone(), new_status.clone());
-            self.update_pixel(pos.x, pos.y, new_status.color.clone(), PixelSource::Other).await;
+        for (pos, new_status) in updates {
+            self.pixels.insert(pos, new_status);
         }
 
-        for (pos, new_status) in &additions {
-            // self.pixels.insert(pos.clone(), new_status.clone());
-            self.update_pixel(pos.x, pos.y, new_status.color.clone(), PixelSource::Other).await;
+        for (pos, new_status) in additions {
+            self.pixels.insert(pos, new_status);
         }
 
-        for pos in &removals {
+        for pos in removals {
             self.pixels.remove(&pos);
         }
 
         tracing::info!(
             "全量同步完成\n更新：{} 个像素；新增：{} 个像素；删除：{} 个像素",
-            &updates.len(),
-            &additions.len(),
-            &removals.len()
+            updates_len,
+            additions_len,
+            removals_len
         );
 
-        // 只有当实际发生了更改时，才更新版本号和校验和
+        // 只有当实际发生了更改时，才更新版本号
         if has_changes {
-            self.version += 1;
+            self.version.fetch_add(1, Ordering::Relaxed);
         }
 
-        self.is_initialized = true;
-        self.last_sync_time = Some(std::time::SystemTime::now());
+        self.is_initialized.store(true, Ordering::Relaxed);
+        *self.last_sync_time.write() = Some(std::time::SystemTime::now());
     }
 
     /// 检查数据完整性
@@ -287,16 +286,16 @@ impl LocalBoard {
     ///
     /// 如果已初始化返回true，否则返回false
     pub fn is_initialized(&self) -> bool {
-        self.is_initialized
+        self.is_initialized.load(Ordering::Relaxed)
     }
 
     /// 获取当前同步状态
     ///
     /// # 返回值
     ///
-    /// 返回当前的同步状态引用
-    pub fn sync_status(&self) -> &SyncStatus {
-        &self.sync_status
+    /// 返回当前的同步状态副本
+    pub fn sync_status(&self) -> SyncStatus {
+        self.sync_status.read().clone()
     }
 
     /// 设置同步状态
@@ -304,17 +303,17 @@ impl LocalBoard {
     /// # 参数
     ///
     /// * `status` - 新的同步状态
-    pub fn set_sync_status(&mut self, status: SyncStatus) {
-        self.sync_status = status;
+    pub fn set_sync_status(&self, status: SyncStatus) {
+        *self.sync_status.write() = status;
     }
 
     /// 获取最后同步时间
     ///
     /// # 返回值
     ///
-    /// 返回最后同步时间的引用（如果存在）
-    pub fn last_sync_time(&self) -> Option<&std::time::SystemTime> {
-        self.last_sync_time.as_ref()
+    /// 返回最后同步时间的副本（如果存在）
+    pub fn last_sync_time(&self) -> Option<std::time::SystemTime> {
+        *self.last_sync_time.read()
     }
 
     /// 获取画板尺寸
@@ -332,7 +331,7 @@ impl LocalBoard {
     ///
     /// 返回本地画板数据的当前版本号
     pub fn version(&self) -> u64 {
-        self.version
+        self.version.load(Ordering::Relaxed)
     }
 }
 
@@ -348,9 +347,9 @@ mod tests {
         assert!(!board.is_initialized());
     }
 
-    #[tokio::test]
-    async fn test_local_board_pixel_operations() {
-        let mut board = LocalBoard::new(100, 100);
+    #[test]
+    fn test_local_board_pixel_operations() {
+        let board = LocalBoard::new(100, 100);
         let test_color = Rgb::new(255, 0, 0);
 
         board.update_pixel(10, 20, test_color, PixelSource::Own);
@@ -358,8 +357,8 @@ mod tests {
         assert_eq!(board.get_pixel(11, 20), None); // No pixel at (11, 20)
     }
 
-    #[tokio::test]
-    async fn test_update_from_board_applies_server_data() {
+    #[test]
+    fn test_update_from_board_applies_server_data() {
         // create a server board and modify a few pixels, then feed to LocalBoard
         let mut server_board = Board::new();
         // set pixel (0,0) to white and (1,0) to red
@@ -368,7 +367,7 @@ mod tests {
             .unwrap();
         server_board.set_pixel(1, 0, Pixel::new(255, 0, 0)).unwrap();
 
-        let mut local = LocalBoard::new(1000, 600);
+        let local = LocalBoard::new(1000, 600);
         // local has different color at (0,0)
         local.update_pixel(0, 0, Rgb::new(0, 0, 0), PixelSource::Own);
 
