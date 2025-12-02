@@ -1,7 +1,9 @@
 //! `PaintBatcher` 模块实现了绘制操作的批量处理和调度。
 
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
+
 use tokio::sync::mpsc;
 use winter_paintboard_sdk::basic_client::AsyncClient;
 use winter_paintboard_sdk::models::PaintOperation;
@@ -61,7 +63,7 @@ impl PaintBatcher {
                 Some(op) = self.receiver.recv() => {
                     self.batch.push(op);
                     if self.batch.len() >= self.batch_size_limit {
-                        self.flush().await;
+                        self.flush_and_spawn();
                         // 刷新后重置定时器，避免立即因超时而再次刷新
                         interval.reset();
                     }
@@ -70,42 +72,44 @@ impl PaintBatcher {
                 // 事件 2: 定时器触发
                 _ = interval.tick() => {
                     if !self.batch.is_empty() {
-                        self.flush().await;
+                        self.flush_and_spawn();
                     }
                 }
 
-                // 事件 3: 通道关闭 (所有 Worker 已停止)
-                else => {
-                    if !self.batch.is_empty() {
-                        self.flush().await;
-                    }
-                    log::info!("PaintBatcher 通道关闭，任务结束。");
-                    break;
-                }
+                // 通道关闭后，select! 将不会再进入 recv() 分支。
+                // 我们依赖定时器来处理最后的批次，并保持任务存活以接收未来可能的新任务。
             }
         }
     }
 
-    /// 发送当前批次中的所有绘制操作。
-    async fn flush(&mut self) {
-        // 使用 `std::mem::take` 高效地移出当前批次，同时清空 `self.batch`
-        let batch_to_send = std::mem::take(&mut self.batch);
-        let batch_len = batch_to_send.len();
-
-        log::debug!("刷新批处理，操作数: {}", batch_len);
-
-        // 调用 SDK 的新方法
-        match self.client.paint_batch_multi_token(batch_to_send).await {
-            Ok(_) => {
-                log::info!("成功发送 {} 个绘制操作的批处理", batch_len);
-                // 批量发送成功，可以在这里更新全局指标
-            }
-            Err(e) => {
-                // 处理整个批次发送失败的情况，例如网络断开
-                log::error!("批量发送失败: {:?}", e);
-                // 注意：在这种模式下，失败的操作不会被重试。
-                // 上层的比对循环会最终重新将这些像素加入队列。
-            }
+    /// 将当前批处理任务生成一个独立的 Tokio 任务来执行。
+    /// 这样做可以防止 `flush` 内部的 panic 导致整个 `PaintBatcher` 循环崩溃。
+    fn flush_and_spawn(&mut self) {
+        if self.batch.is_empty() {
+            return;
         }
+
+        // 使用 `std::mem::take` 高效地移出当前批次，为新任务准备数据
+        let batch_to_send = std::mem::take(&mut self.batch);
+        let client = self.client.clone();
+
+        // 生成一个新任务来发送批处理
+        tokio::spawn(async move {
+            let batch_len = batch_to_send.len();
+            log::debug!("刷新批处理，操作数: {}", batch_len);
+
+            // 使用 `catch_unwind` 来捕获 SDK 调用中可能发生的 panic
+            let result = client.paint_batch_multi_token(batch_to_send).await;
+
+            match result {
+                Ok(_) => {
+                    log::info!("成功发送 {} 个绘制操作的批处理", batch_len);
+                }
+                Err(e) => {
+                    // 整个批次发送失败，例如网络错误
+                    log::error!("批量发送失败: {:?}", e);
+                }
+            }
+        });
     }
 }

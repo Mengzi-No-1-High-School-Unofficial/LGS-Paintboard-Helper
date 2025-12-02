@@ -74,7 +74,8 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             export_interval,
             canny_low_thresh,
             canny_high_thresh,
-            penalty_scale
+            penalty_scale,
+            batch_size,
         } => {
             // 多 Token 模式
             run_multi_token_mode(
@@ -93,7 +94,8 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 export_interval,
                 canny_low_thresh,
                 canny_high_thresh,
-                penalty_scale
+                penalty_scale,
+                batch_size,
             )
             .await
         }
@@ -144,7 +146,8 @@ pub async fn run_multi_token_mode(
     export_interval: u64,
     canny_low_thresh: f32,
     canny_high_thresh: f32,
-    penalty_scale: f32
+    penalty_scale: f32,
+    batch_size: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::app::board_sync::BoardSyncManager;
     use crate::app::image_processing::process_image_at_all_scales;
@@ -232,6 +235,7 @@ pub async fn run_multi_token_mode(
         tokio::time::Duration::from_millis(comparison_interval),
         canny_low_thresh,
         canny_high_thresh,
+        batch_size,
     )
     .await?;
 

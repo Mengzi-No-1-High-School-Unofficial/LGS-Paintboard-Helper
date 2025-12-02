@@ -60,6 +60,8 @@ pub struct MultiTokenService {
     token_manager: Arc<TokenManager>,
     /// 共享客户端
     shared_client: Arc<AsyncClient>,
+    /// 批处理大小
+    batch_size: usize,
 }
 
 impl MultiTokenService {
@@ -89,6 +91,7 @@ impl MultiTokenService {
         start_x: i32,
         start_y: i32,
         comparison_interval: Duration,
+        batch_size: usize,
     ) -> Result<Self, Report> {
         Self::with_canny_thresholds(
             token_config,
@@ -100,6 +103,7 @@ impl MultiTokenService {
             comparison_interval,
             20.0, // 默认低阈值
             40.0, // 默认高阈值
+            batch_size,
         )
         .await
     }
@@ -132,6 +136,7 @@ impl MultiTokenService {
         comparison_interval: Duration,
         canny_low_thresh: f32,
         canny_high_thresh: f32,
+        batch_size: usize,
     ) -> Result<Self, Report> {
         // 解析所有 Token（将 access_key 转换为 token）
         let tokens = Self::fetch_tokens(&token_config).await?;
@@ -173,6 +178,7 @@ impl MultiTokenService {
             comparison_interval,
             token_manager,
             shared_client,
+            batch_size,
         })
     }
 
@@ -197,7 +203,7 @@ impl MultiTokenService {
         let mut batcher = PaintBatcher::new(
             batch_receiver,
             self.shared_client.clone(),
-            100, // 批处理大小限制
+            self.batch_size, // 批处理大小限制
             Duration::from_millis(200), // 时间限制
         );
 
