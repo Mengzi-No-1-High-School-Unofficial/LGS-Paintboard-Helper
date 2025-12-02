@@ -3,7 +3,6 @@ use crate::basic_client::ws_provider::ws_reconnect::WsReconnectManager;
 use crate::basic_client::ws_provider::ws_response_tracker::WsResponseTracker;
 use crate::{
     config::Config,
-    event::{Event, EventBus},
     models::ProtocolMessage,
 };
 use color_eyre::eyre::Context;
@@ -53,7 +52,6 @@ impl WsMessageHandler {
 
             Message::Close(close_frame) => {
                 warn!("🔌 收到连接关闭: {:?}", close_frame);
-                let _ = EventBus::global().send(crate::event::Event::ConnectionClosed);
             }
 
             Message::Text(text) => {
@@ -90,7 +88,6 @@ impl WsMessageHandler {
         match protocol_msg {
             ProtocolMessage::HeartbeatPing => {
                 debug!("💓 收到服务器心跳 PING");
-                let _ = EventBus::global().send(crate::event::Event::HeartbeatEvent);
 
                 // 回复心跳 PONG
                 use crate::models::OpCode;
@@ -134,8 +131,8 @@ impl WsMessageHandler {
                 }
             }
 
-            ProtocolMessage::PaintEvent { pos, color } => {
-                let _ = EventBus::global().send(crate::event::Event::other_paint_event(pos, color));
+            ProtocolMessage::PaintEvent { .. } => {
+                // 不再需要处理这个事件
             }
 
             ProtocolMessage::Unknown { opcode, data } => {
@@ -219,7 +216,6 @@ impl WsMessageHandler {
                                 }
                                 drop(cleanup_guard);
 
-                                let _ = EventBus::global().send(Event::ConnectionClosed);
                                 break; // break inner loop to attempt reconnection
                             }
                         }

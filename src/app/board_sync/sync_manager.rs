@@ -3,14 +3,13 @@
 //! 该模块负责管理本地画板与服务器之间的同步，包括全量同步、增量同步
 //! 和事件监听等功能。
 
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
-use winter_paintboard_sdk::event::Event;
 use winter_paintboard_sdk::PaintboardClientTrait;
 
-use super::local_board::{LocalBoard, PixelSource, SyncStatus};
+use super::local_board::{LocalBoard, SyncStatus};
 
 /// 画板同步管理器
 ///
@@ -20,33 +19,23 @@ use super::local_board::{LocalBoard, PixelSource, SyncStatus};
 pub struct BoardSyncManager {
     /// 本地画板数据的Arc引用
     local_board: Arc<LocalBoard>,
-    /// 事件总线，用于处理实时事件
-    event_bus: Arc<winter_paintboard_sdk::event::EventBus>, // 使用EventBus而不是Receiver
     /// 停止标志，用于控制同步循环
     should_stop: Arc<RwLock<bool>>,
     /// 同步进行中标志，用于在同步期间暂停事件处理
     sync_in_progress: Arc<RwLock<bool>>,
-    /// 待处理事件列表，缓存同步期间收到的事件
-    pending_events: Arc<Mutex<Vec<Event>>>,
 }
 
 impl BoardSyncManager {
     /// 创建新的同步管理器
     ///
-    /// # 参数
-    ///
-    /// * `event_bus` - 事件总线引用
-    ///
     /// # 返回值
     ///
     /// 返回初始化的同步管理器实例
-    pub fn new(event_bus: &winter_paintboard_sdk::event::EventBus) -> Self {
+    pub fn new() -> Self {
         Self {
             local_board: Arc::new(LocalBoard::new(1000, 600)),
-            event_bus: Arc::new(event_bus.clone()),
             should_stop: Arc::new(RwLock::new(false)),
             sync_in_progress: Arc::new(RwLock::new(false)),
-            pending_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -148,8 +137,7 @@ impl BoardSyncManager {
                     *sync_flag = false;
                 }
 
-                // 应用在同步期间缓存的事件
-                sync_manager.apply_pending_events().await;
+                // 同步期间不再缓存事件
             }
         });
 
@@ -235,122 +223,11 @@ impl BoardSyncManager {
                     *sync_flag = false;
                 }
 
-                // 应用在同步期间缓存的事件
-                sync_manager.apply_pending_events().await;
+                // 同步期间不再缓存事件
             }
         });
 
         Ok(())
-    }
-
-    /// 开始事件监听循环（增量更新）
-    ///
-    /// 启动一个后台任务，监听实时事件并更新本地画板数据
-    ///
-    /// # 返回值
-    ///
-    /// * `Ok(())` - 成功启动事件监听器
-    /// * `Err` - 启动过程中发生错误
-    pub async fn start_event_listener(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let local_board = self.local_board.clone();
-        // 在事件监听器内部创建新的 Receiver
-        let mut event_receiver = self.event_bus.subscribe();
-        let should_stop = self.should_stop.clone();
-        let sync_in_progress = self.sync_in_progress.clone();
-        let pending_events = self.pending_events.clone();
-
-        tokio::spawn(async move {
-            loop {
-                // 检查是否需要停止
-                {
-                    let stop = should_stop.read().await;
-                    if *stop {
-                        info!("停止事件监听器");
-                        break;
-                    }
-                    drop(stop); // 释放锁
-                }
-
-                match event_receiver.recv().await {
-                    Ok(event) => {
-                        // 检查是否正在进行同步
-                        {
-                            let sync_flag = sync_in_progress.read().await;
-                            if *sync_flag {
-                                // 在同步期间，将事件添加到待处理列表中
-                                let mut pending = pending_events.lock().await;
-                                pending.push(event.clone());
-                                // debug!("同步进行中，缓存事件: {:?}", event);
-                                continue; // 跳过事件处理
-                            }
-                            drop(sync_flag); // 释放锁
-                        }
-
-                        // 根据事件类型更新本地数据
-                        Self::process_event(&local_board, event);
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        error!("事件接收器已关闭");
-                        break;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        warn!("事件接收滞后，跳过了 {} 个事件", skipped);
-                    }
-                }
-            }
-        });
-
-        Ok(())
-    }
-
-    /// 处理单个事件
-    ///
-    /// 根据事件类型更新本地画板数据
-    ///
-    /// # 参数
-    ///
-    /// * `local_board` - 本地画板引用
-    /// * `event` - 要处理的事件
-    fn process_event(local_board: &Arc<LocalBoard>, event: Event) {
-        match event {
-            Event::OwnPaintEvent { pos, color } => {
-                // debug!("😊 处理自己的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
-                local_board.update_pixel(pos.x, pos.y, color, PixelSource::Own);
-            }
-            Event::OtherPaintEvent { pos, color } => {
-                // debug!("👀 处理他人的绘制事件: ({}, {}) = {:?}", pos.x, pos.y, color);
-                local_board.update_pixel(pos.x, pos.y, color, PixelSource::Other);
-            }
-            Event::HeartbeatEvent => {
-                debug!("收到心跳事件");
-            }
-            Event::ConnectionOpened => {
-                info!("WebSocket连接已建立");
-            }
-            Event::ConnectionClosed => {
-                warn!("WebSocket连接已关闭");
-            }
-            Event::ConnectionClosedWithCode(code) => {
-                warn!("WebSocket连接已关闭，状态码: {}", code);
-            }
-        }
-    }
-
-    /// 应用缓存的事件
-    ///
-    /// 将在同步期间缓存的事件应用到本地画板数据
-    async fn apply_pending_events(&self) {
-        let pending_events = {
-            let mut pending = self.pending_events.lock().await;
-            pending.drain(..).collect::<Vec<_>>()
-        };
-
-        if !pending_events.is_empty() {
-            info!("应用 {} 个缓存的事件", pending_events.len());
-            for event in pending_events {
-                Self::process_event(&self.local_board, event);
-            }
-        }
     }
 
     /// 停止同步管理器

@@ -1,7 +1,6 @@
 use crate::{
     config::{Config, ConnectionMode},
     error::PaintboardError,
-    event::{Event, EventBus},
     models::{
         OpCode, PaintOperation, PaintResult, PaintStatus, Pos, ProtocolMessage, Rgb,
     },
@@ -323,10 +322,6 @@ impl WsActor {
                 *self.connected.lock().await = true;
                 self.reconnecting.store(false, Ordering::Relaxed);
 
-                // 发送连接打开事件到事件总线
-                let event_bus = EventBus::global();
-                let _ = event_bus.send(Event::ConnectionOpened);
-
                 // 启动消息处理任务
                 self.start_message_processing_task().await;
 
@@ -334,7 +329,6 @@ impl WsActor {
             }
             Err(e) => {
                 error!("WebSocket 连接失败: {}", e); // Changed from debug to error
-                let event_bus = EventBus::global();
                 Err(PaintboardError::websocket(e.to_string()))
             }
         }
@@ -508,7 +502,6 @@ impl WsActor {
 
                         tokio_tungstenite::tungstenite::protocol::Message::Close(frame) => {
                             warn!("收到连接关闭: {:?}", frame);
-                            let _ = EventBus::global().send(Event::ConnectionClosed);
                             break; // 退出循环
                         }
 
@@ -526,7 +519,6 @@ impl WsActor {
                 }
                 None => {
                     warn!("WebSocket 连接关闭 (收到 None)");
-                    let _ = EventBus::global().send(Event::ConnectionClosed);
                     break; // 退出循环
                 }
             }
@@ -541,7 +533,6 @@ impl WsActor {
         match protocol_msg {
             ProtocolMessage::HeartbeatPing => {
                 debug!("收到服务器心跳 PING");
-                let _ = EventBus::global().send(Event::HeartbeatEvent);
                 // Send Heartbeat Pong (0xfb) using the actor's sender
                 let pong_msg = vec![OpCode::HeartbeatPong as u8];
                 let (response_tx, _) = oneshot::channel(); // Dummy channel
@@ -578,8 +569,8 @@ impl WsActor {
                 }
             }
 
-            ProtocolMessage::PaintEvent { pos, color } => {
-                let _ = EventBus::global().send(Event::other_paint_event(pos, color));
+            ProtocolMessage::PaintEvent { .. } => {
+                // 不再需要处理这个事件
             }
 
             ProtocolMessage::Unknown { opcode, data } => {
@@ -1166,20 +1157,9 @@ impl AsyncWsProvider {
                     return Err(PaintboardError::Internal(e.to_string()));
                 }
 
-                // Emit own_paint_event for each operation in the current batch
-                let event_bus = EventBus::global();
-                for (pos, color) in &operations[start..i] {
-                    let _ = event_bus.send(Event::own_paint_event(*pos, *color));
-                }
             }
 
             start = i;
-        }
-
-        // Emit own_paint_event for each operation
-        let event_bus = EventBus::global();
-        for (pos, color) in &operations {
-            let _ = event_bus.send(Event::own_paint_event(*pos, *color));
         }
 
         Ok(())

@@ -1,4 +1,4 @@
-use crate::{config::Config, error::PaintboardError, event::EventBus};
+use crate::{config::Config, error::PaintboardError};
 use color_eyre::Report;
 use futures::SinkExt;
 use std::sync::Arc;
@@ -58,10 +58,6 @@ impl WsConnection {
                 let mut guard = self.stream.lock().await;
                 *guard = Some(ws_stream);
                 drop(guard);
-
-                // 发送连接打开事件到事件总线
-                let event_bus = EventBus::global();
-                let _ = event_bus.send(crate::event::Event::ConnectionOpened);
 
                 Ok(())
             }

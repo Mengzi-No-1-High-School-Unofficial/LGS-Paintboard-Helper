@@ -166,8 +166,7 @@ pub async fn run_multi_token_mode(
     let token_config = crate::app::multi_token::config::TokenConfig::from_file(&config_path)?;
 
     // 创建同步管理器
-    let event_bus = winter_paintboard_sdk::event::EventBus::global();
-    let sync_manager = BoardSyncManager::new(&event_bus);
+    let sync_manager = BoardSyncManager::new();
 
     // 为同步任务创建新的客户端
     let mut sync_config = Config::default();
@@ -200,9 +199,6 @@ pub async fn run_multi_token_mode(
             tokio::time::Duration::from_millis(std::cmp::max(comparison_interval, 7500)),
         )
         .await?;
-
-    // 启动事件监听（增量更新）
-    sync_manager.start_event_listener().await?;
 
     info!("本地绘版数据同步已启动");
 
