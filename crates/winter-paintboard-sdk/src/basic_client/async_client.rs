@@ -1,7 +1,7 @@
 use crate::{
     config::Config,
     error::PaintboardError,
-    models::{Board, Pos, Rgb},
+    models::{Board, PaintOperation, Pos, Rgb},
 };
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -116,6 +116,24 @@ impl AsyncClient {
         self.handle_result(result)
     }
 
+    /// 使用多个 Token 批量绘制多个像素点。
+    ///
+    /// # 参数
+    /// - `operations`: 包含完整绘画操作信息的向量。
+    ///
+    /// # 返回
+    /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
+    pub async fn paint_batch_multi_token_impl(
+        &self,
+        operations: Vec<PaintOperation>,
+    ) -> Result<(), PaintboardError> {
+        let result = self
+            .ws_provider
+            .paint_batch_multi_token(operations)
+            .await;
+        self.handle_result(result)
+    }
+
     /// 处理操作结果，根据结果标记健康状态
     fn handle_result<T>(&self, result: Result<T, PaintboardError>) -> Result<T, PaintboardError> {
         match &result {
@@ -221,6 +239,20 @@ impl PaintboardClientTrait for AsyncClient {
     ) -> Result<(), PaintboardError> {
         self.paint_batch_with_auth_impl(operations, uid, token)
             .await
+    }
+
+    /// 使用多个 Token 批量绘制多个像素点。
+    ///
+    /// # 参数
+    /// - `operations`: 包含完整绘画操作信息的向量，每个操作可以有不同的 Token。
+    ///
+    /// # 返回
+    /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
+    async fn paint_batch_multi_token(
+        &self,
+        operations: Vec<PaintOperation>,
+    ) -> Result<(), PaintboardError> {
+        self.paint_batch_multi_token_impl(operations).await
     }
 
     /// 使用批量操作一次性绘制多个像素 (粘性数据包，不等待响应) (deprecated - use paint_batch_with_auth)

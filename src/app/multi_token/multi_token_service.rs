@@ -18,7 +18,7 @@ use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
 use crate::app::multi_token::cli::get_penalty_scale;
 use crate::app::multi_token::config::{PriorityPixel, TokenConfig, TokenEntry};
-use crate::app::multi_token::paint_executor::{PaintExecutor, PaintRequestQueue};
+use crate::app::multi_token::paint_batcher::PaintBatcher;
 use crate::app::multi_token::pixel_queue::PixelQueue;
 use crate::app::multi_token::token_manager::{TokenInfo, TokenManager};
 use crate::app::multi_token::token_worker::TokenWorker;
@@ -32,8 +32,8 @@ use winter_paintboard_sdk::{basic_client::AsyncClient, config::Config, Paintboar
 pub struct MultiTokenService {
     /// Token工作线程句柄列表
     workers: Vec<tokio::task::JoinHandle<()>>,
-    /// 绘制执行器线程句柄
-    executor_handle: Option<tokio::task::JoinHandle<()>>,
+    /// 批量绘制处理器线程句柄
+    batcher_handle: Option<tokio::task::JoinHandle<()>>,
     /// 比对循环线程句柄
     comparison_handle: Option<tokio::task::JoinHandle<()>>,
     /// 指标打印线程句柄
@@ -159,7 +159,7 @@ impl MultiTokenService {
 
         Ok(Self {
             workers: Vec::new(),
-            executor_handle: None,
+            batcher_handle: None,
             comparison_handle: None,
             metrics_handle: Some(metrics_handle),
             pixel_queue: Arc::new(PixelQueue::new()),
@@ -190,33 +190,29 @@ impl MultiTokenService {
             self.token_manager.len()
         );
 
-        // 创建 PaintRequestQueue
-        let paint_request_queue = Arc::new(PaintRequestQueue::new());
+        // 创建用于 PaintOperation 的 MPSC 通道
+        let (batch_sender, batch_receiver) = tokio::sync::mpsc::unbounded_channel();
 
-        // 启动 PaintExecutor
-        let executor = PaintExecutor::new(
+        // 启动 PaintBatcher
+        let mut batcher = PaintBatcher::new(
+            batch_receiver,
             self.shared_client.clone(),
-            paint_request_queue.clone(),
-            self.local_board.clone(),
-            self.local_paint_history.clone(),
-            self.local_paint_total.clone(),
+            100, // 批处理大小限制
+            Duration::from_millis(200), // 时间限制
         );
 
-        let stop_signal = self.stop_signal.clone();
-        self.executor_handle = Some(tokio::spawn(async move {
-            executor.run(stop_signal).await;
+        self.batcher_handle = Some(tokio::spawn(async move {
+            batcher.run().await;
         }));
 
         // 为每个 Token 创建 Worker
-        // let ws_url = self.shared_client.get_config().ws_url.clone();
-
         for i in 0..self.token_manager.len() {
             let token_manager = self.token_manager.clone();
             let pixel_queue = self.pixel_queue.clone();
-            let request_queue = paint_request_queue.clone();
+            let batch_sender = batch_sender.clone();
             let stop_signal = self.stop_signal.clone();
 
-            let worker = TokenWorker::new(i, token_manager, pixel_queue, request_queue);
+            let worker = TokenWorker::new(i, token_manager, pixel_queue, batch_sender);
             let handle = tokio::spawn(async move {
                 if let Err(e) = worker.run(stop_signal).await {
                     log::error!("Worker {} 出错: {:?}", i, e);

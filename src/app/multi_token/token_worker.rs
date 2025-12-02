@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use crate::app::multi_token::pixel_queue::PixelQueue;
 use crate::app::multi_token::token_manager::TokenManager;
-use winter_paintboard_sdk::PaintboardClientTrait;
+use tokio::sync::mpsc;
+use rand;
+use winter_paintboard_sdk::{models::PaintOperation, PaintboardClientTrait};
 
 /// Token 工作器
 ///
@@ -22,8 +24,8 @@ pub struct TokenWorker {
     token_manager: Arc<TokenManager>,
     /// 像素队列
     pixel_queue: Arc<PixelQueue>,
-    /// 绘制请求队列
-    request_queue: Arc<crate::app::multi_token::paint_executor::PaintRequestQueue>,
+    /// 用于将 `PaintOperation` 发送到 `PaintBatcher` 的通道。
+    batch_sender: mpsc::UnboundedSender<PaintOperation>,
 }
 
 impl TokenWorker {
@@ -34,7 +36,7 @@ impl TokenWorker {
     /// * `worker_id` - 工作器ID
     /// * `token_manager` - Token管理器
     /// * `pixel_queue` - 像素队列
-    /// * `request_queue` - 绘制请求队列
+    /// * `batch_sender` - 用于发送 `PaintOperation` 的通道发送端。
     ///
     /// # 返回值
     ///
@@ -43,13 +45,13 @@ impl TokenWorker {
         worker_id: usize,
         token_manager: Arc<TokenManager>,
         pixel_queue: Arc<PixelQueue>,
-        request_queue: Arc<crate::app::multi_token::paint_executor::PaintRequestQueue>,
+        batch_sender: mpsc::UnboundedSender<PaintOperation>,
     ) -> Self {
         Self {
             worker_id,
             token_manager,
             pixel_queue,
-            request_queue,
+            batch_sender,
         }
     }
 
@@ -81,12 +83,11 @@ impl TokenWorker {
             let mut token_lease = match self.token_manager.clone().try_acquire() {
                 Some(lease) => lease,
                 None => {
-                    // 等待最短 CD
-                    if let Some(wait) = self.token_manager.next_available_in() {
-                        let wait = wait.min(Duration::from_millis(25));
-                        tokio::time::sleep(wait).await;
+                    // 如果没有可用的 Token，则等待一小段时间或直到下一个 Token 可用
+                    if let Some(wait_duration) = self.token_manager.next_available_in() {
+                        tokio::time::sleep(wait_duration.min(Duration::from_millis(50))).await;
                     } else {
-                        tokio::time::sleep(Duration::from_millis(25)).await;
+                        tokio::time::sleep(Duration::from_millis(50)).await;
                     }
                     continue;
                 }
@@ -96,18 +97,32 @@ impl TokenWorker {
             let pixel = match self.pixel_queue.try_pop() {
                 Some(p) => p,
                 None => {
-                    // 没有任务，释放 Token
+                    // 没有任务，立即释放 Token，避免占用
                     token_lease.mark_failed();
-                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    tokio::time::sleep(Duration::from_millis(100)).await; // 队列为空，等待更长时间
                     continue;
                 }
             };
 
-            // 3. 组装并发送绘制请求
-            let request =
-                crate::app::multi_token::paint_request::PaintRequest::new(pixel, token_lease);
-            if let Err(e) = self.request_queue.send(request) {
-                error!("Worker {}: 发送请求失败: {}", self.worker_id, e);
+            // 3. 创建 PaintOperation 并发送到 PaintBatcher
+            let operation = PaintOperation {
+                pos: pixel.pos,
+                color: pixel.color,
+                token_uid: token_lease.uid(),
+                token: token_lease.token().to_string(),
+                paint_id: rand::random(), // 在批量模式下，paint_id 主要用于日志和追踪
+            };
+
+            if let Err(e) = self.batch_sender.send(operation) {
+                error!(
+                    "Worker {}: 发送操作到 Batcher 失败: {}",
+                    self.worker_id, e
+                );
+                // 发送失败，意味着 Batcher 已关闭，将 Token 标记为失败以立即释放
+                token_lease.mark_failed();
+            } else {
+                // 发送成功后，立即将 Token 标记为成功使用，以启动其 CD 计时
+                token_lease.mark_success();
             }
         }
 

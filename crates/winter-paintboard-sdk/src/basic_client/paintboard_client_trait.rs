@@ -1,7 +1,7 @@
 use crate::{
     config::Config,
     error::PaintboardError,
-    models::{Board, PaintResult, Pos, Rgb},
+    models::{Board, PaintOperation, PaintResult, Pos, Rgb},
 };
 use async_trait::async_trait;
 
@@ -108,6 +108,23 @@ pub trait PaintboardClientTrait {
         // 默认实现：如果实现者没有提供此方法，则返回错误
         Err(PaintboardError::auth(
             "paint_batch_with_auth not implemented".to_string(),
+        ))
+    }
+
+    /// 使用多个 Token 批量绘制多个像素点。
+    ///
+    /// # 参数
+    /// - `operations`: 包含完整绘画操作信息的向量，每个操作可以有不同的 Token。
+    ///
+    /// # 返回
+    /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
+    async fn paint_batch_multi_token(
+        &self,
+        operations: Vec<PaintOperation>,
+    ) -> Result<(), PaintboardError> {
+        // 默认实现：如果实现者没有提供此方法，则返回错误
+        Err(PaintboardError::auth(
+            "paint_batch_multi_token not implemented".to_string(),
         ))
     }
 }

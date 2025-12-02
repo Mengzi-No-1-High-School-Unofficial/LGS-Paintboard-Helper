@@ -2,7 +2,9 @@ use crate::{
     config::{Config, ConnectionMode},
     error::PaintboardError,
     event::{Event, EventBus},
-    models::{OpCode, PaintOperation, PaintResult, PaintStatus, Pos, ProtocolMessage, Rgb},
+    models::{
+        OpCode, PaintOperation, PaintResult, PaintStatus, Pos, ProtocolMessage, Rgb,
+    },
 };
 use color_eyre::Report;
 use futures::{SinkExt, StreamExt};
@@ -1208,6 +1210,60 @@ impl AsyncWsProvider {
     /// 注意：此方法直接返回 `is_connected` 的结果，因为 `AsyncWsProvider` 本身不维护健康状态。
     pub async fn is_healthy(&self) -> bool {
         self.is_connected().await
+    }
+
+    /// 使用多个 Token 批量绘制多个像素点。
+    ///
+    /// # 参数
+    /// - `operations`: 包含完整绘画操作信息的向量。
+    ///
+    /// # 返回
+    /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
+    pub async fn paint_batch_multi_token(
+        &self,
+        operations: Vec<PaintOperation>,
+    ) -> Result<(), PaintboardError> {
+        if self.reconnecting.load(Ordering::Relaxed) || !self.is_connected().await {
+            return Err(PaintboardError::ConnectionClosed);
+        }
+
+        if operations.is_empty() {
+            return Ok(());
+        }
+
+        // 将所有操作序列化并合并到一个大的二进制包中
+        let mut combined_data = Vec::new();
+        let mut paint_ids = Vec::new();
+
+        for op in &operations {
+            paint_ids.push(op.paint_id);
+            combined_data.extend(op.to_binary());
+        }
+
+        if combined_data.len() > MAX_PACKET_SIZE {
+            return Err(PaintboardError::invalid_data(format!(
+                "批量绘制消息大小 {} 字节超过限制 {} 字节",
+                combined_data.len(),
+                MAX_PACKET_SIZE
+            )));
+        }
+
+        // 为批次中的每一个操作注册响应追踪器
+        for paint_id in &paint_ids {
+            let _ = self.response_tracker.register_request(*paint_id).await;
+        }
+
+        // 发送合并后的数据包，不等待响应
+        match self.send_binary(combined_data).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // 如果发送失败，需要清理已注册的追踪器
+                for paint_id in &paint_ids {
+                    let _ = self.response_tracker.remove_request(*paint_id).await;
+                }
+                Err(PaintboardError::Internal(e.to_string()))
+            }
+        }
     }
 }
 
