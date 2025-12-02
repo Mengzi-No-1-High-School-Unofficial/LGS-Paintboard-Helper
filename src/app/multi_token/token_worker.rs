@@ -83,10 +83,10 @@ impl TokenWorker {
                 None => {
                     // 等待最短 CD
                     if let Some(wait) = self.token_manager.next_available_in() {
-                        let wait = wait.min(Duration::from_millis(100));
+                        let wait = wait.min(Duration::from_millis(25));
                         tokio::time::sleep(wait).await;
                     } else {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        tokio::time::sleep(Duration::from_millis(25)).await;
                     }
                     continue;
                 }
@@ -98,7 +98,7 @@ impl TokenWorker {
                 None => {
                     // 没有任务，释放 Token
                     token_lease.mark_failed();
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    tokio::time::sleep(Duration::from_millis(25)).await;
                     continue;
                 }
             };

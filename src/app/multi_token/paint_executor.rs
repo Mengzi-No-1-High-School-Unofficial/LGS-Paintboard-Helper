@@ -136,7 +136,7 @@ impl PaintExecutor {
             let request = match self.request_queue.recv().await {
                 Some(req) => req,
                 None => {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
                     continue;
                 }
             };
