@@ -7,7 +7,7 @@ use crate::{
 use color_eyre::Report;
 use futures::{SinkExt, StreamExt};
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex, Notify, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration, Instant};
@@ -30,6 +30,8 @@ enum ConnectionRequest {
     Close(oneshot::Sender<Result<(), PaintboardError>>),
     /// 用于标记连接已断开（例如，消息处理任务结束）
     MarkDisconnected,
+    /// 内部消息，用于触发重连任务
+    StartReconnect,
 }
 
 /// 发送请求类型
@@ -64,6 +66,7 @@ struct WsActor {
     reconnect_manager: Arc<TokioMutex<WsReconnectManager>>,
     rate_limiter: Arc<WsRateLimiter>,
     message_task_ready: Arc<Notify>,
+    reconnecting: Arc<AtomicBool>,
     pending_packets: Arc<RwLock<VecDeque<Vec<u8>>>>,
     /// 用于接收消息的通道
     receiver: mpsc::UnboundedReceiver<WsActorMessage>,
@@ -96,6 +99,8 @@ struct WsActor {
     cleanup_task_handle: Option<JoinHandle<()>>,
     /// 健康检查任务句柄
     health_check_task_handle: Option<JoinHandle<()>>,
+    /// 重连任务句柄
+    reconnect_task_handle: Option<JoinHandle<()>>,
     /// 连接是否健康
     connected: Arc<TokioMutex<bool>>,
     /// 上次发送数据包的时间
@@ -111,6 +116,7 @@ impl WsActor {
         reconnect_manager: Arc<TokioMutex<WsReconnectManager>>,
         rate_limiter: Arc<WsRateLimiter>,
         message_task_ready: Arc<Notify>,
+        reconnecting: Arc<AtomicBool>,
         pending_packets: Arc<RwLock<VecDeque<Vec<u8>>>>,
         receiver: mpsc::UnboundedReceiver<WsActorMessage>,
         sender: mpsc::UnboundedSender<WsActorMessage>,
@@ -121,6 +127,7 @@ impl WsActor {
             reconnect_manager,
             rate_limiter,
             message_task_ready,
+            reconnecting,
             pending_packets,
             receiver,
             sender: sender.clone(), // Add sender field
@@ -131,6 +138,7 @@ impl WsActor {
             send_pending_packets_by_limit_handle: None,
             cleanup_task_handle: None,
             health_check_task_handle: None,
+            reconnect_task_handle: None,
             connected: Arc::new(TokioMutex::new(false)),
             last_send_time: Arc::new(TokioMutex::new(Instant::now())),
             last_health_check: Arc::new(TokioMutex::new(Instant::now())),
@@ -182,9 +190,11 @@ impl WsActor {
                                 response_tx,
                             });
                             if let Err(e) = self.sender.send(message) {
-                                error!("发送 pending_packets (按时间) 失败: {:?}", e);
+                                error!("发送 pending_packets (按时间) 失败: {:?}，触发重连检查", e);
                                 // 发送失败，将数据放回队列
                                 *pending_packets = packets_to_send.into_iter().collect();
+                                // 触发连接状态检查
+                                let _ = self.sender.send(WsActorMessage::Connection(ConnectionRequest::MarkDisconnected));
                             } else {
                                 debug!("按时间间隔发送了 {} 字节的 pending_packets", data_len);
                                 *last_send_time = Instant::now();
@@ -208,9 +218,11 @@ impl WsActor {
                                 response_tx,
                             });
                             if let Err(e) = self.sender.send(message) {
-                                error!("发送 pending_packets (按大小) 失败: {:?}", e);
+                                error!("发送 pending_packets (按大小) 失败: {:?}，触发重连检查", e);
                                 // 发送失败，将数据放回队列
                                 *pending_packets = packets_to_send.into_iter().collect();
+                                // 触发连接状态检查
+                                let _ = self.sender.send(WsActorMessage::Connection(ConnectionRequest::MarkDisconnected));
                             } else {
                                 debug!("按大小限制发送了 {} 字节的 pending_packets", data_len);
                                 *last_send_time = Instant::now();
@@ -244,8 +256,14 @@ impl WsActor {
                 *self.connected.lock().await = false;
                 self.ws_sender = None;
                 self.ws_receiver_stream = None;
-                // Optionally, trigger a reconnection attempt here if desired
-                // self.reconnect_manager.lock().await.reconnect(...).await?;
+                
+                if !self.reconnecting.load(Ordering::Relaxed) {
+                    debug!("检测到连接断开，发送 StartReconnect 消息");
+                    let _ = self.sender.send(WsActorMessage::Connection(ConnectionRequest::StartReconnect));
+                }
+            }
+            ConnectionRequest::StartReconnect => {
+                self.start_reconnect_task().await;
             }
         }
     }
@@ -301,6 +319,7 @@ impl WsActor {
                 self.ws_sender = Some(sender);
                 self.ws_receiver_stream = Some(receiver);
                 *self.connected.lock().await = true;
+                self.reconnecting.store(false, Ordering::Relaxed);
 
                 // 发送连接打开事件到事件总线
                 let event_bus = EventBus::global();
@@ -322,9 +341,9 @@ impl WsActor {
     async fn send_binary_internal(&mut self, data: Vec<u8>) -> Result<(), Report> {
         debug!("尝试发送二进制消息，数据大小: {} 字节", data.len());
 
-        if !*self.connected.lock().await {
+        if !*self.connected.lock().await || self.reconnecting.load(Ordering::Relaxed) {
             return Err(
-                Report::new(PaintboardError::ConnectionClosed).wrap_err("无法发送消息，连接未建立")
+                Report::new(PaintboardError::ConnectionClosed).wrap_err("无法发送消息，连接未建立或正在重连")
             );
         }
 
@@ -343,27 +362,11 @@ impl WsActor {
                     Ok(())
                 }
                 Err(e) => {
-                    // 检查是否是连接关闭错误
-                    match e {
-                        tokio_tungstenite::tungstenite::Error::ConnectionClosed => {
-                            error!("检测到连接已关闭，清理连接状态");
-                            *self.connected.lock().await = false;
-                            self.ws_sender = None;
-                            self.ws_receiver_stream = None;
-                            self.connect_internal().await?;
-                        }
-                        tokio_tungstenite::tungstenite::Error::AlreadyClosed => {
-                            error!("检测到连接已关闭，清理连接状态");
-                            *self.connected.lock().await = false;
-                            self.ws_sender = None;
-                            self.ws_receiver_stream = None;
-                            self.connect_internal().await?;
-                        }
-                        _ => {
-                            return Err(Report::new(e).wrap_err("发送消息失败"));
-                        }
-                    }
-
+                    error!("发送二进制消息时检测到连接错误: {}", e);
+                    // 发送 MarkDisconnected 消息来触发重连
+                    let _ = self.sender.send(WsActorMessage::Connection(
+                        ConnectionRequest::MarkDisconnected,
+                    ));
                     Err(Report::new(e).wrap_err("发送消息失败"))
                 }
             }
@@ -396,26 +399,11 @@ impl WsActor {
                     Ok(())
                 }
                 Err(e) => {
-                    match e {
-                        tokio_tungstenite::tungstenite::Error::ConnectionClosed => {
-                            error!("检测到连接已关闭，清理连接状态");
-                            *self.connected.lock().await = false;
-                            self.ws_sender = None;
-                            self.ws_receiver_stream = None;
-                            self.connect_internal().await?;
-                        }
-                        tokio_tungstenite::tungstenite::Error::AlreadyClosed => {
-                            error!("检测到连接已关闭，清理连接状态");
-                            *self.connected.lock().await = false;
-                            self.ws_sender = None;
-                            self.ws_receiver_stream = None;
-                            self.connect_internal().await?;
-                        }
-                        _ => {
-                            return Err(Report::new(e).wrap_err("发送 Pong 消息失败"));
-                        }
-                    }
-
+                    error!("发送 Pong 消息时检测到连接错误: {}", e);
+                    // 发送 MarkDisconnected 消息来触发重连
+                    let _ = self.sender.send(WsActorMessage::Connection(
+                        ConnectionRequest::MarkDisconnected,
+                    ));
                     Err(Report::new(e).wrap_err("发送 Pong 消息失败"))
                 }
             }
@@ -639,6 +627,9 @@ impl WsActor {
         if let Some(handle) = self.health_check_task_handle.take() {
             handle.abort();
         }
+        if let Some(handle) = self.reconnect_task_handle.take() {
+            handle.abort();
+        }
 
         // 关闭连接
         let _ = self.close_internal().await;
@@ -725,89 +716,100 @@ impl WsActor {
                     continue;
                 }
 
-                let mut should_reconnect: bool = false;
-
                 // 等待响应，设置较短的超时时间
                 match tokio::time::timeout(std::time::Duration::from_secs(5), response_rx).await {
                     Ok(Ok(result)) => {
                         // 收到响应，检查是否是预期的 "Token 无效" 状态
-                        match result.status {
-                            PaintStatus::InvalidToken => {
-                                // 收到预期的响应，说明连接健康
-                                debug!("健康检查成功：收到预期的无效 Token 响应");
-                            }
-                            _ => {
-                                // 收到其他响应，可能表示连接有问题
-                                warn!("健康检查失败：收到意外响应状态 {:?}", result.status);
-
-                                // 发送 MarkDisconnected 消息来标记连接断开
-                                let _ = actor_sender.send(WsActorMessage::Connection(
-                                    ConnectionRequest::MarkDisconnected,
-                                ));
-                            }
+                        if result.status != PaintStatus::InvalidToken {
+                            // 收到其他响应，可能表示连接有问题
+                            warn!("健康检查失败：收到意外响应状态 {:?}", result.status);
+                            let _ = actor_sender.send(WsActorMessage::Connection(
+                                ConnectionRequest::MarkDisconnected,
+                            ));
+                        } else {
+                            debug!("健康检查成功：收到预期的无效 Token 响应");
                         }
                     }
                     Ok(Err(_)) => {
                         // 响应通道关闭，说明连接有问题
                         warn!("健康检查失败：响应通道关闭");
-
-                        // 发送 MarkDisconnected 消息来标记连接断开
                         let _ = actor_sender.send(WsActorMessage::Connection(
                             ConnectionRequest::MarkDisconnected,
                         ));
-
-                        should_reconnect = true;
                     }
                     Err(_) => {
                         // 超时，说明连接有问题
                         warn!("健康检查超时：未收到响应");
-
-                        // 发送 MarkDisconnected 消息来标记连接断开
                         let _ = actor_sender.send(WsActorMessage::Connection(
                             ConnectionRequest::MarkDisconnected,
                         ));
-
-                        should_reconnect = true;
                     }
                 }
 
-                if should_reconnect {
-                    let (connect_response_tx, connect_response_rx) = oneshot::channel();
+            }
+        });
 
-                    let _ = actor_sender.send(WsActorMessage::Connection(
-                        ConnectionRequest::Connect(connect_response_tx),
-                    ));
+        self.health_check_task_handle = Some(task_handle);
+    }
 
-                    let result: Result<Result<Result<(), PaintboardError>, oneshot::error::RecvError>, tokio::time::error::Elapsed> =
-                        tokio::time::timeout(Duration::from_secs(5), connect_response_rx).await;
+    async fn start_reconnect_task(&mut self) {
+        if let Some(handle) = &self.reconnect_task_handle {
+            if !handle.is_finished() {
+                debug!("重连任务已在运行，跳过");
+                return;
+            }
+        }
 
-                    match result {
-                        Ok(result) => {
-                            match result {
-                                Ok(connect_result) => {
-                                    match connect_result {
-                                        Ok(_) => {
-                                            debug!("健康检查后重连成功");
-                                        }
-                                        Err(e) => {
-                                            warn!("{}", Report::new(e).wrap_err("健康检查后重连失败"));
-                                        }
-                                    }
-                                }
-                                Err(_) => {
-                                    warn!("{}", Report::new(PaintboardError::Internal("Actor 响应通道关闭".to_string())).wrap_err("健康检查后重连失败"));
-                                }
-                            }
-                        },
-                        Err(_) => {
-                            warn!("{}", Report::new(PaintboardError::timeout()).wrap_err("健康检查后重连超时"));
-                        }
+        self.reconnecting.store(true, Ordering::Relaxed);
+        debug!("启动自动重连任务");
+
+        let sender = self.sender.clone();
+        let reconnect_manager = self.reconnect_manager.clone();
+        let reconnecting_clone = self.reconnecting.clone();
+
+        let task = tokio::spawn(async move {
+            loop {
+                let mut rm = reconnect_manager.lock().await;
+                if !rm.should_reconnect() {
+                    debug!("重连被禁用，停止重连任务");
+                    reconnecting_clone.store(false, Ordering::Relaxed);
+                    break;
+                }
+
+                let delay = rm.next_delay().await;
+                drop(rm);
+
+                debug!("等待 {:?} 后尝试重连...", delay);
+                tokio::time::sleep(delay).await;
+
+                let (response_tx, response_rx) = oneshot::channel();
+                let message = WsActorMessage::Connection(ConnectionRequest::Connect(response_tx));
+                if sender.send(message).is_err() {
+                    error!("Actor channel closed, cannot attempt reconnect. Stopping reconnect task.");
+                    reconnecting_clone.store(false, Ordering::Relaxed);
+                    break;
+                }
+
+                match response_rx.await {
+                    Ok(Ok(())) => {
+                        debug!("重连成功，退出重连任务");
+                        reconnect_manager.lock().await.reset().await;
+                        // `reconnecting` is set to false in `connect_internal`
+                        break;
+                    }
+                    Ok(Err(e)) => {
+                        warn!("重连尝试失败: {}", e);
+                    }
+                    Err(_) => {
+                        error!("Actor response channel closed during reconnect. Stopping reconnect task.");
+                        reconnecting_clone.store(false, Ordering::Relaxed);
+                        break;
                     }
                 }
             }
         });
 
-        self.health_check_task_handle = Some(task_handle);
+        self.reconnect_task_handle = Some(task);
     }
 }
 
@@ -819,6 +821,7 @@ pub struct AsyncWsProvider {
     reconnect_manager: Arc<TokioMutex<WsReconnectManager>>,
     rate_limiter: Arc<WsRateLimiter>,
     message_task_ready: Arc<Notify>,
+    reconnecting: Arc<AtomicBool>,
     pending_packets: Arc<RwLock<VecDeque<Vec<u8>>>>,
     /// 用于向 Actor 发送消息的发送端
     sender: mpsc::UnboundedSender<WsActorMessage>,
@@ -834,6 +837,7 @@ impl AsyncWsProvider {
         // 采用与原实现一致的速率：256 rps（注意：原注释存在 120/256 的混淆）
         let rate_limiter = Arc::new(WsRateLimiter::new(256));
         let message_task_ready = Arc::new(Notify::new());
+        let reconnecting = Arc::new(AtomicBool::new(false));
         let pending_packets = Arc::new(RwLock::new(VecDeque::new()));
 
         // 创建与 Actor 通信的通道
@@ -846,6 +850,7 @@ impl AsyncWsProvider {
             reconnect_manager.clone(),
             rate_limiter.clone(),
             message_task_ready.clone(),
+            reconnecting.clone(),
             pending_packets.clone(),
             receiver,
             sender.clone(), // Pass the sender
@@ -862,6 +867,7 @@ impl AsyncWsProvider {
             reconnect_manager,
             rate_limiter,
             message_task_ready,
+            reconnecting,
             pending_packets,
             sender,
             actor_task_handle: Arc::new(TokioMutex::new(Some(actor_handle))),
@@ -938,6 +944,9 @@ impl AsyncWsProvider {
         uid: u32,
         token: &str,
     ) -> Result<PaintResult, PaintboardError> {
+        if self.reconnecting.load(Ordering::Relaxed) || !self.is_connected().await {
+            return Err(PaintboardError::ConnectionClosed);
+        }
         let paint_id = rand::random::<u32>();
         let operation = PaintOperation {
             pos,
@@ -1006,17 +1015,18 @@ impl AsyncWsProvider {
         let paint_id = rand::random::<u32>();
 
         // Ensure connected
-        let is_connected = self.is_connected().await;
-        debug!(
-            "paint_with_auth() - 连接状态检查结果: {} (paint_id: {})",
-            is_connected, paint_id
-        );
-        if !is_connected {
-            debug!("连接不存在，建立新连接 (paint_id: {})", paint_id);
-            self.connect().await?;
-            debug!("新连接建立成功 (paint_id: {})", paint_id);
-        } else {
-            debug!("连接已存在，尝试复用连接 (paint_id: {})", paint_id);
+        if self.reconnecting.load(Ordering::Relaxed) {
+            debug!("paint_with_auth() - 正在重连 (paint_id: {})", paint_id);
+            return Err(Report::new(PaintboardError::ConnectionClosed)
+                .wrap_err("连接正在重连，请稍后重试"));
+        }
+
+        if !self.is_connected().await {
+            debug!("paint_with_auth() - 连接已断开 (paint_id: {})", paint_id);
+            // The reconnect task should be running in the background.
+            // We just fail fast here.
+            return Err(Report::new(PaintboardError::ConnectionClosed)
+                .wrap_err("连接已断开，请稍后重试"));
         }
 
         // Create operation with provided authentication
@@ -1130,11 +1140,13 @@ impl AsyncWsProvider {
             }
 
             if !all_binary.is_empty() {
+                if self.reconnecting.load(Ordering::Relaxed) {
+                    debug!("批量发送 - 正在重连");
+                    return Err(PaintboardError::ConnectionClosed);
+                }
                 if !self.is_connected().await {
-                    debug!("批量发送 - 连接不存在，建立新连接");
-                    self.connect().await?;
-                } else {
-                    debug!("批量发送 - 连接已存在，复用连接");
+                    debug!("批量发送 - 连接已断开");
+                    return Err(PaintboardError::ConnectionClosed);
                 }
 
                 // 为当前批次的操作注册请求
