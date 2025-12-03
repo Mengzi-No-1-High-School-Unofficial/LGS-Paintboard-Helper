@@ -5,7 +5,7 @@
 
 use color_eyre::eyre::Ok;
 use color_eyre::Report;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use rustc_hash::FxHashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -246,8 +246,9 @@ impl MultiTokenService {
 
         self.comparison_handle = Some(comparison_handle);
 
-        // 启动 LocalBoard 的事件监听器
+        // 启动 LocalBoard 的事件监听器和热力图清理任务
         self.local_board.start_event_listener();
+        self.local_board.start_heatmap_cleanup_task();
 
         info!("多 Token 服务已启动，Worker 数量: {}", self.workers.len());
         Ok(())
@@ -319,13 +320,33 @@ impl MultiTokenService {
             interval_timer.tick().await;
 
             debug!("开始比对绘版与目标图片...");
-
             if !local_board.is_initialized() {
                 warn!("本地绘版未初始化，跳过比对");
                 continue;
             }
 
-            // 计算差异像素
+            // 1. 计算总绘制频率 (∑R)
+            let total_recent_paints = local_board
+                .get_heatmap()
+                .iter()
+                .map(|entry| {
+                    let now = std::time::SystemTime::now();
+                    entry
+                        .value()
+                        .iter()
+                        .filter(|&&timestamp| {
+                            now.duration_since(timestamp).unwrap_or_default()
+                                < std::time::Duration::from_secs(10 * 60)
+                        })
+                        .count()
+                })
+                .sum::<usize>() as f64;
+
+            const MIN_TOTAL_PAINTS: f64 = 100.0; // 最小总绘画数，避免早期惩罚过高
+            let penalty_divisor = total_recent_paints.max(MIN_TOTAL_PAINTS);
+            let penalty_scale = get_penalty_scale() as f64;
+
+            // 2. 计算每个差异像素的优先级
             let mut differences = Vec::new();
             let local_pixels = local_board.get_pixels();
             for (pos, target_color) in &target_image.full_scale_operations {
@@ -335,27 +356,14 @@ impl MultiTokenService {
                 let relative_x = x - start_x;
                 let relative_y = y - start_y;
 
-                let relative_pos = Pos::new(relative_x as u16, relative_y as u16);
-
-                if let Err(e) = relative_pos {
-                    error!("{}", Report::new(e).wrap_err("无法计算对于图片的相对位置"));
-                    continue;
-                }
-
-                let relative_pos = relative_pos.unwrap();
-
                 if relative_x >= 0
                     && relative_y >= 0
                     && relative_x < target_image.img_width as i32
                     && relative_y < target_image.img_height as i32
                 {
-                    let priority = if let Some(current_pixel) = local_pixels.get(pos) {
+                    let base_priority = if let Some(current_pixel) = local_pixels.get(pos) {
                         if current_pixel.color != *target_color {
-                            // 使用 Canny 优先级，如果该像素是边缘，则使用其边缘强度，否则使用一个较低的默认值
-                            // *target_image
-                                // .pixel_canny_priorities
-                                // .get(&relative_pos)
-                                // .unwrap_or(&0.0)
+                            // 基础优先级，后续可替换为 Canny 边缘强度等
                             ((pos.x + pos.y) % 8) as f64
                         } else {
                             continue; // 颜色一致，跳过
@@ -364,12 +372,20 @@ impl MultiTokenService {
                         255.0 // 缺少像素，最高优先级
                     };
 
-                    let priority = priority - local_board.get_penalty_priority(pos);
+                    // 3. 计算归一化惩罚值并应用
+                    let recent_paints = local_board.calculate_penalty(pos); // 这现在只返回近期绘制数
+                    let penalty = (recent_paints / penalty_divisor) * penalty_scale;
+                    let final_priority = base_priority - penalty;
+
+                    trace!(
+                        "像素 ({}, {}): 基础优先级: {:.2}, 近期绘制: {}, 惩罚: {:.2}, 最终优先级: {:.2}",
+                        pos.x, pos.y, base_priority, recent_paints, penalty, final_priority
+                    );
 
                     differences.push(PriorityPixel {
                         pos: *pos,
                         color: *target_color,
-                        priority,
+                        priority: final_priority,
                     });
                 }
             }

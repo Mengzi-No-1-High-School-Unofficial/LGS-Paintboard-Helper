@@ -137,11 +137,11 @@ impl ExportManager {
                 for x in 0..width {
                     let pos = winter_paintboard_sdk::models::Pos::new(x, y).unwrap();
 
-                    // 根据热点图值确定颜色强度
-                    let intensity = heatmap.get(&pos).map(|v| *v).unwrap_or(0);
+                    // 根据热点图中的时间戳数量确定颜色强度
+                    let intensity = heatmap.get(&pos).map(|v| v.len()).unwrap_or(0);
 
                     // 将强度值转换为颜色（强度越高越红）
-                    let pixel = self.intensity_to_color(intensity);
+                    let pixel = self.intensity_to_color(intensity as u32);
                     img.put_pixel(x as u32, y as u32, pixel);
                 }
             }
