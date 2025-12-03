@@ -10,12 +10,13 @@ use parking_lot::RwLock;
 use dashmap::DashMap;
 use winter_paintboard_sdk::models::{Board, Pos, Rgb};
 use tracing::{info, debug, trace};
+use std::time::SystemTime;
 
 use crate::app::multi_token::cli::get_penalty_scale;
 use winter_paintboard_sdk::event;
 
-/// 热力图过期时间（毫秒）
-const HEATMAP_EXPIRE_DURATION_MILLS: u64 = 10 * 60 * 1000; // 10min
+/// 热力图过期时间
+const HEATMAP_EXPIRE_DURATION: Duration = Duration::from_secs(10 * 60); // 10min
 
 /// 像素来源枚举，用于区分像素是来自自己的绘制还是其他用户的绘制
 #[repr(u8)]
@@ -47,10 +48,10 @@ pub struct PixelStatus {
 pub struct LocalBoard {
     /// 使用 DashMap 存储像素位置到状态的映射，支持高并发读写
     pixels: DashMap<Pos, PixelStatus>,
-    /// 热力图数据，用于记录像素被绘制的频率
-    heatmap: Arc<DashMap<Pos, u32>>,
+    /// 热力图数据，用于记录像素被绘制的时间戳
+    heatmap: Arc<DashMap<Pos, Vec<SystemTime>>>,
     /// 最后同步时间
-    last_sync_time: RwLock<Option<std::time::SystemTime>>,
+    last_sync_time: RwLock<Option<SystemTime>>,
     /// 同步状态
     sync_status: RwLock<SyncStatus>,
     /// 是否已初始化
@@ -160,7 +161,7 @@ impl LocalBoard {
     /// # 返回值
     ///
     /// 返回指向热力图数据的Arc引用
-    pub fn get_heatmap(&self) -> &Arc<DashMap<Pos, u32>> {
+    pub fn get_heatmap(&self) -> &Arc<DashMap<Pos, Vec<SystemTime>>> {
         &self.heatmap
     }
 
@@ -308,7 +309,7 @@ impl LocalBoard {
     /// # 返回值
     ///
     /// 返回最后同步时间的副本（如果存在）
-    pub fn last_sync_time(&self) -> Option<std::time::SystemTime> {
+    pub fn last_sync_time(&self) -> Option<SystemTime> {
         *self.last_sync_time.read()
     }
 
@@ -330,10 +331,7 @@ impl LocalBoard {
         self.version.load(Ordering::Relaxed)
     }
 
-
-    /// 获取指定像素位置的惩罚优先级
-    ///
-    /// 惩罚优先级越高，表示该像素越不应该被绘制
+    /// 计算并返回指定像素位置在近期（10分钟内）的绘制次数
     ///
     /// # 参数
     ///
@@ -341,19 +339,22 @@ impl LocalBoard {
     ///
     /// # 返回值
     ///
-    /// 返回计算出的惩罚优先级
-    pub fn get_penalty_priority(&self, pos: &Pos) -> f64 {
-        let penalty_scale = get_penalty_scale();
-        let heatmap_value = self.heatmap.get(pos).map_or(0, |entry| *entry.value());
+    /// 返回近期绘制次数 (`f64`)
+    pub fn calculate_penalty(&self, pos: &Pos) -> f64 {
+        // 计算10分钟内的绘制次数
+        let recent_paints = self.heatmap.get(pos).map_or(0, |entry| {
+            let now = SystemTime::now();
+            entry
+                .value()
+                .iter()
+                .filter(|&&timestamp| {
+                    now.duration_since(timestamp).unwrap_or_default() < HEATMAP_EXPIRE_DURATION
+                })
+                .count()
+        });
 
-        // 简单的惩罚计算：热力图值 * 惩罚系数
-        let penalty = heatmap_value as f64 * penalty_scale as f64;
-
-        debug!("LocalBoard: 像素 ({}, {}) 的惩罚优先级为: {}", pos.x, pos.y, penalty);
-
-        penalty
+        recent_paints as f64
     }
-
     /// 启动事件监听器，监听来自 SDK 的绘制事件并更新本地画板状态
     pub fn start_event_listener(self: &Arc<Self>) {
         let mut receiver = event::subscribe();
@@ -368,9 +369,12 @@ impl LocalBoard {
                         self_clone.update_pixel(pos.x, pos.y, color, PixelSource::Own);
 
 
-                        // 3. 更新热力图
-                        self_clone.heatmap.entry(pos).or_insert(0); // 确保存在
-                        *self_clone.heatmap.get_mut(&pos).unwrap() += 1;
+                        // 3. 更新热力图，记录绘制时间戳
+                        self_clone
+                            .heatmap
+                            .entry(pos)
+                            .or_default()
+                            .push(SystemTime::now());
 
                         trace!("LocalBoard: 通过事件更新像素 at ({}, {})", pos.x, pos.y);
                     }
@@ -379,9 +383,12 @@ impl LocalBoard {
                         // 注意：我们将他人绘制视为 PixelSource::Other
                         self_clone.update_pixel(pos.x, pos.y, color, PixelSource::Other);
 
-                        // 2. 更新热力图
-                        self_clone.heatmap.entry(pos).or_insert(0); // 确保存在
-                        *self_clone.heatmap.get_mut(&pos).unwrap() += 1;
+                        // 2. 更新热力图，记录绘制时间戳
+                        self_clone
+                            .heatmap
+                            .entry(pos)
+                            .or_default()
+                            .push(SystemTime::now());
 
                         trace!("LocalBoard: 通过他人绘制事件更新像素 at ({}, {})", pos.x, pos.y);
                     }
@@ -391,10 +398,48 @@ impl LocalBoard {
                         // 这里暂时只记录日志，后续可以根据需求细化惩罚逻辑
                         debug!("LocalBoard: 绘制失败事件 at ({}, {})", pos.x, pos.y);
                         // 失败也应该增加热力图计数，因为尝试绘制也消耗了资源
-                        self_clone.heatmap.entry(pos).or_insert(0); // 确保存在
-                        *self_clone.heatmap.get_mut(&pos).unwrap() += 1;
+                        self_clone
+                            .heatmap
+                            .entry(pos)
+                            .or_default()
+                            .push(SystemTime::now());
                     }
                 }
+            }
+        });
+    }
+
+    /// 启动热力图清理任务，定期移除过期的绘制记录
+    pub fn start_heatmap_cleanup_task(self: &Arc<Self>) {
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60)); // 每分钟清理一次
+            info!("LocalBoard: 热力图清理任务已启动");
+            loop {
+                interval.tick().await;
+                trace!("LocalBoard: 开始清理过期热力图数据");
+                let now = SystemTime::now();
+                let mut empty_keys = Vec::new();
+
+                self_clone.heatmap.iter_mut().for_each(|mut entry| {
+                    // 移除所有超过10分钟的时间戳
+                    entry.value_mut().retain(|&timestamp| {
+                        now.duration_since(timestamp).unwrap_or_default() < HEATMAP_EXPIRE_DURATION
+                    });
+                    // 如果清理后列表为空，则记录该键以便后续删除
+                    if entry.value().is_empty() {
+                        empty_keys.push(*entry.key());
+                    }
+                });
+
+                // 从DashMap中移除所有空的条目
+                if !empty_keys.is_empty() {
+                    trace!("LocalBoard: 移除 {} 个空的热力图条目", empty_keys.len());
+                    for key in empty_keys {
+                        self_clone.heatmap.remove(&key);
+                    }
+                }
+                trace!("LocalBoard: 热力图数据清理完成");
             }
         });
     }
