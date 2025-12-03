@@ -9,8 +9,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use parking_lot::RwLock;
 use dashmap::DashMap;
 use winter_paintboard_sdk::models::{Board, Pos, Rgb};
+use tracing::{info, debug, trace};
 
 use crate::app::multi_token::cli::get_penalty_scale;
+use winter_paintboard_sdk::event;
 
 /// 热力图过期时间（毫秒）
 const HEATMAP_EXPIRE_DURATION_MILLS: u64 = 10 * 60 * 1000; // 10min
@@ -120,12 +122,6 @@ impl LocalBoard {
                 },
             );
 
-            // TODO: 热力图 count 减少
-            // {
-            //     let heatmap = self.heatmap.clone();
-            //     let mut heatmap = heatmap.write();
-            //     *heatmap.entry(pos.clone()).or_insert(0) += 1;
-            // }
 
             self.version.fetch_add(1, Ordering::Relaxed);
         }
@@ -332,6 +328,75 @@ impl LocalBoard {
     /// 返回本地画板数据的当前版本号
     pub fn version(&self) -> u64 {
         self.version.load(Ordering::Relaxed)
+    }
+
+
+    /// 获取指定像素位置的惩罚优先级
+    ///
+    /// 惩罚优先级越高，表示该像素越不应该被绘制
+    ///
+    /// # 参数
+    ///
+    /// * `pos` - 像素位置
+    ///
+    /// # 返回值
+    ///
+    /// 返回计算出的惩罚优先级
+    pub fn get_penalty_priority(&self, pos: &Pos) -> f64 {
+        let penalty_scale = get_penalty_scale();
+        let heatmap_value = self.heatmap.get(pos).map_or(0, |entry| *entry.value());
+
+        // 简单的惩罚计算：热力图值 * 惩罚系数
+        let penalty = heatmap_value as f64 * penalty_scale as f64;
+
+        debug!("LocalBoard: 像素 ({}, {}) 的惩罚优先级为: {}", pos.x, pos.y, penalty);
+
+        penalty
+    }
+
+    /// 启动事件监听器，监听来自 SDK 的绘制事件并更新本地画板状态
+    pub fn start_event_listener(self: &Arc<Self>) {
+        let mut receiver = event::subscribe();
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            info!("LocalBoard: 事件监听器已启动");
+            while let Ok(event) = receiver.recv().await {
+                match event {
+                    event::PaintEvent::Success { uid, pos, color } => {
+                        // 1. 更新像素颜色
+                        // 注意：我们将自己的成功绘制视为 PixelSource::Own
+                        self_clone.update_pixel(pos.x, pos.y, color, PixelSource::Own);
+
+
+                        // 3. 更新热力图
+                        self_clone.heatmap.entry(pos).or_insert(0); // 确保存在
+                        *self_clone.heatmap.get_mut(&pos).unwrap() += 1;
+
+                        trace!("LocalBoard: 通过事件更新像素 at ({}, {})", pos.x, pos.y);
+                    }
+                    event::PaintEvent::OtherPaint { pos, color } => {
+                        // 1. 更新像素颜色
+                        // 注意：我们将他人绘制视为 PixelSource::Other
+                        self_clone.update_pixel(pos.x, pos.y, color, PixelSource::Other);
+
+                        // 2. 更新热力图
+                        self_clone.heatmap.entry(pos).or_insert(0); // 确保存在
+                        *self_clone.heatmap.get_mut(&pos).unwrap() += 1;
+
+                        trace!("LocalBoard: 通过他人绘制事件更新像素 at ({}, {})", pos.x, pos.y);
+                    }
+                    event::PaintEvent::Failure { uid, pos } => {
+                        // 记录失败事件，可能用于惩罚机制的调整
+                        // 例如，可以增加一个失败计数，或者在惩罚计算中考虑失败次数
+                        // 这里暂时只记录日志，后续可以根据需求细化惩罚逻辑
+                        debug!("LocalBoard: 绘制失败事件 at ({}, {})", pos.x, pos.y);
+                        // 失败也应该增加热力图计数，因为尝试绘制也消耗了资源
+                        self_clone.heatmap.entry(pos).or_insert(0); // 确保存在
+                        *self_clone.heatmap.get_mut(&pos).unwrap() += 1;
+                    }
+                }
+            }
+        });
     }
 }
 

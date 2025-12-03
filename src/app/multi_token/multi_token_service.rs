@@ -42,10 +42,6 @@ pub struct MultiTokenService {
     pixel_queue: Arc<PixelQueue>,
     /// 本地画板的共享引用
     local_board: Arc<LocalBoard>,
-    /// 本地绘制历史记录，用于惩罚机制
-    local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
-    /// 本地绘制总数，用于惩罚机制
-    local_paint_total: Arc<AtomicU64>,
     /// 目标图像数据
     target_image: ProcessedImageData,
     /// 绘制起始X坐标
@@ -168,8 +164,6 @@ impl MultiTokenService {
             comparison_handle: None,
             metrics_handle: Some(metrics_handle),
             pixel_queue: Arc::new(PixelQueue::new()),
-            local_paint_history: Arc::new(RwLock::new(FxHashMap::default())),
-            local_paint_total: Arc::new(AtomicU64::new(0)),
             local_board,
             target_image,
             start_x,
@@ -236,8 +230,6 @@ impl MultiTokenService {
         let start_y = self.start_y;
         let interval_duration = self.comparison_interval;
         let stop_signal = self.stop_signal.clone();
-        let local_paint_history = self.local_paint_history.clone();
-        let local_paint_total = self.local_paint_total.clone();
 
         let comparison_handle = tokio::spawn(async move {
             Self::run_comparison_loop(
@@ -248,13 +240,14 @@ impl MultiTokenService {
                 start_y,
                 interval_duration,
                 stop_signal,
-                local_paint_history,
-                local_paint_total,
             )
             .await;
         });
 
         self.comparison_handle = Some(comparison_handle);
+
+        // 启动 LocalBoard 的事件监听器
+        self.local_board.start_event_listener();
 
         info!("多 Token 服务已启动，Worker 数量: {}", self.workers.len());
         Ok(())
@@ -315,8 +308,6 @@ impl MultiTokenService {
         start_y: i32,
         interval_duration: Duration,
         stop_signal: Arc<AtomicBool>,
-        local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
-        local_paint_total: Arc<AtomicU64>,
     ) {
         let mut interval_timer = interval(interval_duration);
 
@@ -373,7 +364,7 @@ impl MultiTokenService {
                         255.0 // 缺少像素，最高优先级
                     };
 
-                    let priority = priority - Self::get_penalty_priority(pos, local_paint_history.clone(), local_paint_total.clone());
+                    let priority = priority - local_board.get_penalty_priority(pos);
 
                     differences.push(PriorityPixel {
                         pos: *pos,
@@ -529,87 +520,6 @@ impl MultiTokenService {
         }
     }
 
-    /// 获取像素位置的惩罚优先级，为正数，与 Canny 优先级相减
-    ///
-    /// 根据 10 分钟内的绘画频率计算
-    /// 
-    /// $$
-    /// P_{i,j} = C_{i,j} - \frac{R_{i,j}}{\max(\sum R, \text{最小总绘画数})} \times \text{惩罚系数}
-    /// $$
 
-    /// 其中 P 表示某一像素的优先级，R 为该像素 10 分钟内被绘制的次数，$\sum R$为 10 分钟内的总绘制数。
-    /// 
-    /// 其中，`最小总绘画数`、`惩罚系数`是常量，可被外部配置文件调整。
-    /// 含义为，根据该像素调用占比占所有绘制调用的占比和 Canny 算法值决定优先级
-    pub fn get_penalty_priority(
-        pos: &Pos,
-        local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
-        local_paint_total: Arc<AtomicU64>,
-    ) -> f64 {
-        let local_paint_history = local_paint_history.read();
-        let histories = local_paint_history.get(pos);
 
-        if histories.is_none() {
-            return 0.0;
-        }
-
-        let histories = histories.unwrap();
-        let histories = histories
-            .iter()
-            .filter(|x| x.elapsed() < Duration::from_secs(600))
-            .count();
-
-        let total = std::cmp::max(local_paint_total.load(Ordering::Acquire), 500 as u64);
-
-        let penalty = (histories as f64) / (total as f64) * get_penalty_scale() as f64;
-
-        penalty
-    }
-
-    /// 记录本地绘制操作
-    ///
-    /// 将绘制操作记录到历史中，用于惩罚机制计算
-    ///
-    /// # 参数
-    ///
-    /// * `pos` - 绘制位置
-    /// * `local_paint_history` - 本地绘制历史
-    /// * `local_paint_total` - 本地绘制总数
-    pub fn record_local_paint(
-        pos: &Pos,
-        local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
-        local_paint_total: Arc<AtomicU64>,
-    ) {
-        {
-            let mut local_paint_history = local_paint_history.write();
-            let histories = local_paint_history.entry(*pos).or_insert_with(Vec::new);
-            histories.push(Instant::now());
-        }
-
-        local_paint_total.fetch_add(1, Ordering::AcqRel);
-    }
-
-    /// 移除旧的绘制历史记录
-    ///
-    /// 清理超过10分钟的绘制历史记录，保持历史记录的时效性
-    ///
-    /// # 参数
-    ///
-    /// * `local_paint_history` - 本地绘制历史
-    /// * `local_paint_total` - 本地绘制总数
-    pub fn remove_old_paint_histories(
-        local_paint_history: Arc<RwLock<FxHashMap<Pos, Vec<Instant>>>>,
-        local_paint_total: Arc<AtomicU64>,
-    ) {
-        let mut local_paint_history = local_paint_history.write();
-
-        for (_pos, histories) in local_paint_history.iter_mut() {
-            let count_before = histories.len();
-            histories.retain(|t| t.elapsed() < Duration::from_secs(600));
-            let count_after = histories.len();
-            let removed = count_before - count_after;
-
-            local_paint_total.fetch_sub(removed as u64, Ordering::AcqRel);
-        }
-    }
 }

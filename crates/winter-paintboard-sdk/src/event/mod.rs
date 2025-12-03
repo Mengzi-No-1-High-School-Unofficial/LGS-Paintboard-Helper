@@ -3,7 +3,7 @@
 //! 提供一个全局的事件总线，用于在程序的不同部分之间解耦通信。
 //! 基于 `tokio::sync::broadcast` 实现。
 
-use crate::models::Pos;
+use crate::models::{Pos, Rgb};
 use once_cell::sync::Lazy;
 use tokio::sync::broadcast::{self, Receiver, Sender};
 
@@ -11,7 +11,9 @@ use tokio::sync::broadcast::{self, Receiver, Sender};
 #[derive(Debug, Clone, Copy)]
 pub enum PaintEvent {
     /// 绘制成功事件。
-    Success { uid: u32, pos: Pos },
+    Success { uid: u32, pos: Pos, color: Rgb },
+    /// 其他用户绘制事件。
+    OtherPaint { pos: Pos, color: Rgb },
     /// 绘制失败事件。
     Failure { uid: u32, pos: Pos },
 }

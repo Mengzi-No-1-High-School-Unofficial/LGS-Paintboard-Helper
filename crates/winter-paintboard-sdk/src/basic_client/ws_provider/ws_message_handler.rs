@@ -4,6 +4,7 @@ use crate::basic_client::ws_provider::ws_response_tracker::WsResponseTracker;
 use crate::{
     config::Config,
     models::ProtocolMessage,
+    event,
 };
 use color_eyre::eyre::Context;
 use futures::{SinkExt, StreamExt};
@@ -131,8 +132,10 @@ impl WsMessageHandler {
                 }
             }
 
-            ProtocolMessage::PaintEvent { .. } => {
-                // 不再需要处理这个事件
+            ProtocolMessage::PaintEvent { pos, color } => {
+                // 广播他人绘制事件到事件总线
+                event::post(event::PaintEvent::OtherPaint { pos, color });
+                debug!("🎨 收到他人绘制事件并广播: pos={:?}, color={:?}", pos, color);
             }
 
             ProtocolMessage::Unknown { opcode, data } => {
