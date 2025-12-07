@@ -34,11 +34,12 @@ impl AsyncClient {
     pub async fn new_impl(config: Config) -> Result<Self, PaintboardError> {
         let config = Arc::new(config);
         let http_client = crate::basic_client::http_client::HttpProvider::new(config.clone())?;
-        let ws_provider = crate::basic_client::ws_provider::AsyncWsProvider::new(config.clone()).await?;
-        
+        let ws_provider =
+            crate::basic_client::ws_provider::AsyncWsProvider::new(config.clone()).await?;
+
         // 初始化 WebSocket 连接
         ws_provider.connect().await?;
-        
+
         Ok(Self {
             http_client,
             ws_provider,
@@ -110,7 +111,8 @@ impl AsyncClient {
         uid: u32,
         token: &str,
     ) -> Result<(), PaintboardError> {
-        let result = self.ws_provider
+        let result = self
+            .ws_provider
             .paint_batch_with_auth(operations, uid, token)
             .await;
         self.handle_result(result)
@@ -127,10 +129,7 @@ impl AsyncClient {
         &self,
         operations: Vec<PaintOperation>,
     ) -> Result<(), PaintboardError> {
-        let result = self
-            .ws_provider
-            .paint_batch_multi_token(operations)
-            .await;
+        let result = self.ws_provider.paint_batch_multi_token(operations).await;
         self.handle_result(result)
     }
 
@@ -166,7 +165,6 @@ impl AsyncClient {
         self.healthy.store(true, Ordering::Relaxed);
     }
 }
-
 
 #[async_trait]
 impl PaintboardClientTrait for AsyncClient {

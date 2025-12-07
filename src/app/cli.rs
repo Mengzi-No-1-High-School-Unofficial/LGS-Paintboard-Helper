@@ -117,11 +117,11 @@ pub enum Commands {
         /// 导出间隔（秒）
         #[arg(long, default_value_t = 30)]
         export_interval: u64,
-        
+
         /// Canny 边缘检测低阈值
         #[arg(long, default_value_t = 20.0)]
         canny_low_thresh: f32,
-        
+
         /// Canny 边缘检测高阈值
         #[arg(long, default_value_t = 40.0)]
         canny_high_thresh: f32,

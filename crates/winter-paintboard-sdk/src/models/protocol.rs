@@ -129,60 +129,76 @@ impl ProtocolMessage {
         }
 
         let opcode = remaining_data[0];
-        let payload = &remaining_data[1..];
+        let payload_start = 1;
 
+        // Determine message structure and expected length first
+        let (expected_payload_len, is_known_opcode) = match opcode {
+            0xfc => (0, true), // HeartbeatPing: 0 bytes payload
+            0xfa => (7, true), // PaintEvent: 7 bytes payload
+            0xff => (5, true), // PaintResult: 5 bytes payload
+            0xfb => (0, true), // HeartbeatPong: 0 bytes payload (if we were parsing client messages)
+            _ => (0, false),   // Unknown
+        };
+
+        if !is_known_opcode {
+            // Unknown opcode. We don't know the length.
+            // We'll treat it as 1 byte consumed (just the opcode) and return Unknown.
+            // This is risky if it actually has a payload, but it's the best we can do without a length field.
+            return Ok((
+                ProtocolMessage::Unknown {
+                    opcode,
+                    data: Vec::new(),
+                },
+                1,
+            ));
+        }
+
+        // Check if we have enough bytes for the payload
+        if remaining_data.len() < 1 + expected_payload_len {
+            return Err(PaintboardError::invalid_data(format!(
+                "Not enough bytes for opcode 0x{:02x}, expected {} bytes payload",
+                opcode, expected_payload_len
+            )));
+        }
+
+        let payload = &remaining_data[payload_start..payload_start + expected_payload_len];
+        let total_consumed = 1 + expected_payload_len;
+
+        // Now parse semantics. If semantic parsing fails, we return Unknown or log and ignore,
+        // but crucially we return the correct `total_consumed` so the loop can continue.
         match opcode {
-            0xfc => Ok((ProtocolMessage::HeartbeatPing, 1)), // 1 byte for opcode
+            0xfc => Ok((ProtocolMessage::HeartbeatPing, total_consumed)),
             0xfa => {
-                if payload.len() < 7 {
-                    return Err(PaintboardError::invalid_data(
-                        "Not enough bytes for PaintEvent payload",
-                    ));
+                let pos_res = Pos::from_bytes(&payload[0..4]);
+                let color_res = Rgb::from_bytes(&payload[4..7]);
+
+                match (pos_res, color_res) {
+                    (Ok(pos), Ok(color)) => {
+                        Ok((ProtocolMessage::PaintEvent { pos, color }, total_consumed))
+                    }
+                    (Err(_), _) | (_, Err(_)) => {
+                        // Invalid position or color, but we consumed the bytes.
+                        // Return Unknown so it's logged but skipped.
+                        Ok((
+                            ProtocolMessage::Unknown {
+                                opcode,
+                                data: payload.to_vec(),
+                            },
+                            total_consumed,
+                        ))
+                    }
                 }
-
-                let pos = Pos::from_bytes(&payload[0..4])?;
-                let color = Rgb::from_bytes(&payload[4..7])?;
-
-                Ok((ProtocolMessage::PaintEvent { pos, color }, 1 + 7)) // 1 byte opcode + 7 bytes payload
             }
             0xff => {
-                if payload.len() < 5 {
-                    return Err(PaintboardError::invalid_data(
-                        "Not enough bytes for PaintResult payload",
-                    ));
-                }
-
                 let drawing_id =
                     u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
                 let status = payload[4];
-
-                Ok((ProtocolMessage::PaintResult { drawing_id, status }, 1 + 5))
-                // 1 byte opcode + 5 bytes payload
-            }
-            _ => {
-                // For unknown opcodes, return the opcode and payload
-                // We need to determine how many bytes to consume based on the opcode
-                // For now, we'll return a conservative estimate based on common message sizes
-                let total_consumed = match opcode {
-                    0xfb => 1, // HeartbeatPong
-                    _ => {
-                        // For unknown opcodes, we can't determine the exact length
-                        // We'll return an error to prevent consuming all remaining data
-                        return Err(PaintboardError::invalid_data(format!(
-                            "Unknown opcode: 0x{:02x}",
-                            opcode
-                        )));
-                    }
-                };
-
                 Ok((
-                    ProtocolMessage::Unknown {
-                        opcode,
-                        data: payload.to_vec(),
-                    },
+                    ProtocolMessage::PaintResult { drawing_id, status },
                     total_consumed,
                 ))
             }
+            _ => unreachable!("Handled by is_known_opcode check"),
         }
     }
 

@@ -3,16 +3,14 @@
 //! 该模块实现了本地画板数据的存储和同步功能，包括像素数据、热力图、
 //! 数据完整性验证等功能。
 
-use std::{sync::Arc, time::Duration};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::{sync::Arc, time::Duration};
 
-use parking_lot::RwLock;
 use dashmap::DashMap;
-use winter_paintboard_sdk::models::{Board, Pos, Rgb};
-use tracing::{info, debug, trace};
 use std::time::SystemTime;
+use tracing::{debug, info, trace, warn};
+use winter_paintboard_sdk::models::{Board, Pos, Rgb};
 
-use crate::app::multi_token::cli::get_penalty_scale;
 use winter_paintboard_sdk::event;
 
 /// 热力图过期时间
@@ -47,13 +45,9 @@ pub struct PixelStatus {
 #[derive(Debug)]
 pub struct LocalBoard {
     /// 使用 DashMap 存储像素位置到状态的映射，支持高并发读写
-    pixels: DashMap<Pos, PixelStatus>,
+    pixels: Arc<DashMap<Pos, PixelStatus>>,
     /// 热力图数据，用于记录像素被绘制的时间戳
     heatmap: Arc<DashMap<Pos, Vec<SystemTime>>>,
-    /// 最后同步时间
-    last_sync_time: RwLock<Option<SystemTime>>,
-    /// 同步状态
-    sync_status: RwLock<SyncStatus>,
     /// 是否已初始化
     is_initialized: AtomicBool,
     /// 画板宽度
@@ -62,19 +56,6 @@ pub struct LocalBoard {
     height: u16,
     /// 版本号，用于跟踪数据更新
     version: AtomicU64,
-}
-
-#[derive(Debug, Clone)]
-/// 同步状态枚举
-///
-/// 表示本地画板与服务器同步的不同状态
-pub enum SyncStatus {
-    /// 空闲状态
-    Idle,
-    /// 正在同步
-    Syncing,
-    /// 同步错误，包含错误信息
-    Error(String),
 }
 
 impl LocalBoard {
@@ -90,10 +71,8 @@ impl LocalBoard {
     /// 返回初始化的本地画板实例
     pub fn new(width: u16, height: u16) -> Self {
         Self {
-            pixels: DashMap::new(),
+            pixels: Arc::new(DashMap::new()),
             heatmap: Arc::new(DashMap::new()),
-            last_sync_time: RwLock::new(None),
-            sync_status: RwLock::new(SyncStatus::Idle),
             is_initialized: AtomicBool::new(false),
             width,
             height,
@@ -122,7 +101,6 @@ impl LocalBoard {
                     timestamp: current_time,
                 },
             );
-
 
             self.version.fetch_add(1, Ordering::Relaxed);
         }
@@ -214,7 +192,14 @@ impl LocalBoard {
         // 添加服务器有但本地没有的像素
         for y in 0..board.height.min(self.height) {
             for x in 0..board.width.min(self.width) {
-                let pos = Pos::new(x, y).expect("Invalid coordinates during board iteration");
+                let pos = Pos::new(x, y);
+
+                if let Err(e) = pos {
+                    warn!("Failed to parse pos ({}, {}), ignoring: {:?}", x, y, e);
+                    continue;
+                };
+
+                let pos = pos.unwrap();
 
                 if let Ok(server_pixel) = board.get_pixel(x, y) {
                     // 只有当本地没有该像素时才添加
@@ -264,17 +249,6 @@ impl LocalBoard {
         }
 
         self.is_initialized.store(true, Ordering::Relaxed);
-        *self.last_sync_time.write() = Some(std::time::SystemTime::now());
-    }
-
-    /// 检查数据完整性
-    ///
-    /// # 返回值
-    ///
-    /// 由于不必要的完整性检查会造成性能损耗，此函数已废弃并始终返回true
-    #[deprecated(note = "不必要的完整性检查，造成性能损耗，改为返回 `true`")]
-    pub fn verify_integrity(&self) -> bool {
-        true
     }
 
     /// 检查本地画板是否已初始化
@@ -284,33 +258,6 @@ impl LocalBoard {
     /// 如果已初始化返回true，否则返回false
     pub fn is_initialized(&self) -> bool {
         self.is_initialized.load(Ordering::Relaxed)
-    }
-
-    /// 获取当前同步状态
-    ///
-    /// # 返回值
-    ///
-    /// 返回当前的同步状态副本
-    pub fn sync_status(&self) -> SyncStatus {
-        self.sync_status.read().clone()
-    }
-
-    /// 设置同步状态
-    ///
-    /// # 参数
-    ///
-    /// * `status` - 新的同步状态
-    pub fn set_sync_status(&self, status: SyncStatus) {
-        *self.sync_status.write() = status;
-    }
-
-    /// 获取最后同步时间
-    ///
-    /// # 返回值
-    ///
-    /// 返回最后同步时间的副本（如果存在）
-    pub fn last_sync_time(&self) -> Option<SystemTime> {
-        *self.last_sync_time.read()
     }
 
     /// 获取画板尺寸
@@ -361,13 +308,13 @@ impl LocalBoard {
         let self_clone = self.clone();
         tokio::spawn(async move {
             info!("LocalBoard: 事件监听器已启动");
+
             while let Ok(event) = receiver.recv().await {
                 match event {
                     event::PaintEvent::Success { uid, pos, color } => {
                         // 1. 更新像素颜色
                         // 注意：我们将自己的成功绘制视为 PixelSource::Own
                         self_clone.update_pixel(pos.x, pos.y, color, PixelSource::Own);
-
 
                         // 3. 更新热力图，记录绘制时间戳
                         self_clone
@@ -390,19 +337,17 @@ impl LocalBoard {
                             .or_default()
                             .push(SystemTime::now());
 
-                        trace!("LocalBoard: 通过他人绘制事件更新像素 at ({}, {})", pos.x, pos.y);
+                        trace!(
+                            "LocalBoard: 通过他人绘制事件更新像素 at ({}, {})",
+                            pos.x,
+                            pos.y
+                        );
                     }
                     event::PaintEvent::Failure { uid, pos } => {
-                        // 记录失败事件，可能用于惩罚机制的调整
-                        // 例如，可以增加一个失败计数，或者在惩罚计算中考虑失败次数
-                        // 这里暂时只记录日志，后续可以根据需求细化惩罚逻辑
-                        debug!("LocalBoard: 绘制失败事件 at ({}, {})", pos.x, pos.y);
-                        // 失败也应该增加热力图计数，因为尝试绘制也消耗了资源
-                        self_clone
-                            .heatmap
-                            .entry(pos)
-                            .or_default()
-                            .push(SystemTime::now());
+                        debug!(
+                            "LocalBoard: 绘制失败事件 at ({}, {}) with UID {}",
+                            pos.x, pos.y, uid
+                        );
                     }
                 }
             }

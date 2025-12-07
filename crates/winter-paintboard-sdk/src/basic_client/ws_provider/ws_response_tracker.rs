@@ -1,8 +1,8 @@
 use crate::models::{PaintResult, PaintStatus};
+use dashmap::DashMap;
 use once_cell::sync::OnceCell;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{oneshot, Mutex as TokioMutex};
+use tokio::sync::oneshot;
 use tokio::time::{Duration, Instant};
 
 static GLOBAL_WS_RESPONSE_TRACKER: OnceCell<WsResponseTracker> = OnceCell::new();
@@ -14,7 +14,7 @@ static GLOBAL_WS_RESPONSE_TRACKER: OnceCell<WsResponseTracker> = OnceCell::new()
 /// 如果需要独立的追踪器，请使用 [`WsResponseTracker::new_local`]
 #[derive(Clone)]
 pub struct WsResponseTracker {
-    channels: Arc<TokioMutex<HashMap<u32, (oneshot::Sender<PaintResult>, Instant)>>>,
+    channels: Arc<DashMap<u32, (oneshot::Sender<PaintResult>, Instant)>>,
 }
 
 impl WsResponseTracker {
@@ -29,22 +29,22 @@ impl WsResponseTracker {
     /// 创建新的追踪器（无论是否存在全局追踪器）
     pub fn new_local() -> Self {
         Self {
-            channels: Arc::new(TokioMutex::new(HashMap::new())),
+            channels: Arc::new(DashMap::new()),
         }
     }
 
     /// 注册一个请求并返回接收端
     pub async fn register_request(&self, paint_id: u32) -> oneshot::Receiver<PaintResult> {
         let (tx, rx) = oneshot::channel();
-        let mut guard = self.channels.lock().await;
-        guard.insert(paint_id, (tx, Instant::now()));
+        self.channels.insert(paint_id, (tx, Instant::now()));
         rx
     }
 
     /// 完成请求：根据 paint_id 发送结果，返回是否找到对应通道
     pub async fn complete_request(&self, paint_id: u32, result: PaintResult) -> bool {
-        let mut guard = self.channels.lock().await;
-        if let Some((tx, _)) = guard.remove(&paint_id) {
+        let channels = &self.channels;
+
+        if let Some((_, (tx, _))) = channels.remove(&paint_id) {
             // 如果发送失败（接收端被丢弃），则忽略错误
             let _ = tx.send(result);
             true
@@ -55,25 +55,28 @@ impl WsResponseTracker {
 
     /// 移除并返回是否存在（用于超时清理）
     pub async fn remove_request(&self, paint_id: u32) -> bool {
-        let mut guard = self.channels.lock().await;
-        guard.remove(&paint_id).is_some()
+        let channels = &self.channels;
+        channels.remove(&paint_id).is_some()
     }
 
     /// 获取当前挂起通道数量（仅用于监控 / 测试）
     pub async fn pending_count(&self) -> usize {
-        let guard = self.channels.lock().await;
-        guard.len()
+        let channels = &self.channels;
+        channels.len()
     }
 
     /// 清理超时的请求（超过指定持续时间未响应的请求）
     pub async fn cleanup_expired_requests(&self, timeout_duration: Duration) -> usize {
-        let mut guard = self.channels.lock().await;
+        let channels = &self.channels;
         let mut removed_count = 0;
 
         let mut expired_keys = Vec::new();
 
         // 首先找出所有过期的请求
-        for (paint_id, (_, timestamp)) in guard.iter() {
+        for it in channels.iter() {
+            let paint_id = it.key();
+            let timestamp = it.value().1;
+
             if timestamp.elapsed() > timeout_duration {
                 expired_keys.push(*paint_id);
             }
@@ -81,7 +84,7 @@ impl WsResponseTracker {
 
         // 然后移除过期的请求并发送超时结果
         for paint_id in expired_keys {
-            if let Some((tx, _)) = guard.remove(&paint_id) {
+            if let Some((_, (tx, _))) = channels.remove(&paint_id) {
                 // 请求已超时，尝试发送超时错误（如果接收端仍然存在）
                 let _ = tx.send(PaintResult {
                     drawing_id: paint_id as u32, // 使用原始paint_id作为drawing_id

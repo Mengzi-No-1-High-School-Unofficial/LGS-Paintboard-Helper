@@ -22,7 +22,7 @@ pub struct TokenData {
 #[derive(Debug, Deserialize)]
 pub struct TokenResponse {
     /// HTTP 状态码，例如 200 表示成功。
-    #[serde(rename = "statusCode")]
+    #[serde(rename = "code")]
     pub status_code: i32,
     /// 包含实际令牌的 `TokenData` 结构。
     pub data: TokenData,

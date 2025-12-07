@@ -1,6 +1,5 @@
 //! `PaintBatcher` 模块实现了绘制操作的批量处理和调度。
 
-use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -54,7 +53,11 @@ impl PaintBatcher {
     ///
     /// 此方法将持续运行，直到所有发送端都关闭。
     pub async fn run(&mut self) {
-        log::info!("PaintBatcher 启动，批处理大小限制: {}, 时间限制: {:?}", self.batch_size_limit, self.time_limit);
+        log::info!(
+            "PaintBatcher 启动，批处理大小限制: {}, 时间限制: {:?}",
+            self.batch_size_limit,
+            self.time_limit
+        );
         let mut interval = tokio::time::interval(self.time_limit);
 
         loop {
@@ -83,7 +86,6 @@ impl PaintBatcher {
     }
 
     /// 将当前批处理任务生成一个独立的 Tokio 任务来执行。
-    /// 这样做可以防止 `flush` 内部的 panic 导致整个 `PaintBatcher` 循环崩溃。
     fn flush_and_spawn(&mut self) {
         if self.batch.is_empty() {
             return;
@@ -98,7 +100,6 @@ impl PaintBatcher {
             let batch_len = batch_to_send.len();
             log::debug!("刷新批处理，操作数: {}", batch_len);
 
-            // 使用 `catch_unwind` 来捕获 SDK 调用中可能发生的 panic
             let result = client.paint_batch_multi_token(batch_to_send).await;
 
             match result {

@@ -7,9 +7,9 @@ pub mod board_sync;
 pub mod cli;
 pub mod export;
 pub mod image_processing;
+pub mod metrics;
 pub mod multi_token;
 pub mod utils;
-pub mod metrics;
 
 use log::{error, info};
 use std::path::PathBuf;
@@ -156,11 +156,13 @@ pub async fn run_multi_token_mode(
 
     info!("启动多 Token 绘制模式...");
 
-    let _ = multi_token::cli::PENALTY_SCALE.set(penalty_scale).map_err(|e| {
-        let e = color_eyre::Report::msg("无法设置值 PENALTY_SCALE");
-        error!("{}", e);
-        e
-    });
+    let _ = multi_token::cli::PENALTY_SCALE
+        .set(penalty_scale)
+        .map_err(|e| {
+            let e = color_eyre::Report::msg("无法设置值 PENALTY_SCALE");
+            error!("{}", e);
+            e
+        });
 
     // 加载配置
     let token_config = crate::app::multi_token::config::TokenConfig::from_file(&config_path)?;
@@ -174,11 +176,20 @@ pub async fn run_multi_token_mode(
         sync_config.ws_url = url.clone();
     }
 
-    let sync_client: Arc<dyn PaintboardClientTrait + Send + Sync> = get_global_client(sync_config).await?;
+    let sync_client: Arc<dyn PaintboardClientTrait + Send + Sync> =
+        get_global_client(sync_config).await?;
 
     // 处理图片
     info!("正在预处理图片数据...");
-    let processed_image_data = process_image_at_all_scales(&image, width, height, x, y, canny_low_thresh, canny_high_thresh)?;
+    let processed_image_data = process_image_at_all_scales(
+        &image,
+        width,
+        height,
+        x,
+        y,
+        canny_low_thresh,
+        canny_high_thresh,
+    )?;
 
     // 使用第一个 token 的认证信息
     if let Some(first_token) = token_config.tokens.first() {
@@ -194,7 +205,7 @@ pub async fn run_multi_token_mode(
 
     // 启动增量同步循环
     sync_manager
-        .start_incremental_sync_loop(
+        .start_sync_loop(
             sync_client,
             tokio::time::Duration::from_millis(std::cmp::max(comparison_interval, 7500)),
         )

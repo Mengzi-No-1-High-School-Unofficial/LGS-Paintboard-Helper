@@ -77,6 +77,8 @@ impl HttpProvider {
             .send()
             .await
             .map_err(|e| {
+                tracing::error!("HTTP POST failed for get token: {}, {:?}", &url, &e);
+
                 PaintboardError::contextual(
                     format!("HTTP POST failed for get_token: {}", &url),
                     PaintboardError::network(e.to_string()),

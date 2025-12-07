@@ -78,9 +78,7 @@ impl Metrics {
     /// * `Ok(Arc<Metrics>)` - 全局指标实例的Arc引用
     /// * `Err` - 获取过程中发生错误
     pub fn get_instance() -> Result<Arc<Metrics>, Report> {
-        let metrics = METRICS.get_or_init(|| {
-            Arc::new(Metrics::new())
-        }).clone();
+        let metrics = METRICS.get_or_init(|| Arc::new(Metrics::new())).clone();
 
         Ok(metrics)
     }
@@ -96,13 +94,11 @@ impl Metrics {
     /// # 返回值
     ///
     /// 返回指定Token指标数据的Arc引用
-    pub fn get_token_metrics(
-        &self,
-        uid: u32,
-    ) -> Arc<TokenMetricsData> {
-        self.tokens.entry(uid).or_insert_with(|| {
-            Arc::new(TokenMetricsData::new(uid))
-        }).clone()
+    pub fn get_token_metrics(&self, uid: u32) -> Arc<TokenMetricsData> {
+        self.tokens
+            .entry(uid)
+            .or_insert_with(|| Arc::new(TokenMetricsData::new(uid)))
+            .clone()
     }
 
     /// 记录全局绘制成功事件
@@ -114,13 +110,17 @@ impl Metrics {
     /// * `uid` - 用户ID
     /// * `pos` - 绘制位置
     pub fn record_global_paint_success(&self, uid: u32, pos: Pos) {
-        self.global.total_painted_pixels.fetch_add(1, Ordering::Relaxed);
-        self.global.successful_painted_pixels.fetch_add(1, Ordering::Relaxed);
+        self.global
+            .total_painted_pixels
+            .fetch_add(1, Ordering::Relaxed);
+        self.global
+            .successful_painted_pixels
+            .fetch_add(1, Ordering::Relaxed);
 
         let token_metrics = self.get_token_metrics(uid);
         token_metrics.record_paint_success(pos);
     }
-    
+
     /// 记录全局绘制失败事件
     ///
     /// 更新全局和指定Token的失败绘制统计
@@ -130,8 +130,12 @@ impl Metrics {
     /// * `uid` - 用户ID
     /// * `pos` - 绘制位置
     pub fn record_global_paint_failure(&self, uid: u32, pos: Pos) {
-        self.global.total_painted_pixels.fetch_add(1, Ordering::Relaxed);
-        self.global.failed_painted_pixels.fetch_add(1, Ordering::Relaxed);
+        self.global
+            .total_painted_pixels
+            .fetch_add(1, Ordering::Relaxed);
+        self.global
+            .failed_painted_pixels
+            .fetch_add(1, Ordering::Relaxed);
 
         let token_metrics = self.get_token_metrics(uid);
         token_metrics.record_paint_failure(pos);
@@ -167,8 +171,9 @@ impl TokenMetricsData {
     /// * `pos` - 绘制位置
     pub(self) fn record_paint_success(&self, pos: Pos) {
         self.painted_pixels.fetch_add(1, Ordering::Relaxed);
-        self.successful_painted_pixels.fetch_add(1, Ordering::Relaxed);
-        
+        self.successful_painted_pixels
+            .fetch_add(1, Ordering::Relaxed);
+
         let mut history = self.recent_painted_pixels.lock();
         history.push_back((std::time::Instant::now(), pos));
         self.clear_old_entries(&mut history);
@@ -184,7 +189,7 @@ impl TokenMetricsData {
     pub(self) fn record_paint_failure(&self, pos: Pos) {
         self.painted_pixels.fetch_add(1, Ordering::Relaxed);
         self.failed_painted_pixels.fetch_add(1, Ordering::Relaxed);
-        
+
         let mut history = self.recent_painted_pixels.lock();
         history.push_back((std::time::Instant::now(), pos));
         self.clear_old_entries(&mut history);
@@ -220,8 +225,7 @@ impl TokenMetricsData {
 
         if let (None, None) = (first, last) {
             return 0.0;
-        }
-        else {
+        } else {
             let first = first.unwrap();
             let last = last.unwrap();
 

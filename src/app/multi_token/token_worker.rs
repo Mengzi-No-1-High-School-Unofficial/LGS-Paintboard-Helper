@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use crate::app::multi_token::pixel_queue::PixelQueue;
 use crate::app::multi_token::token_manager::TokenManager;
-use tokio::sync::mpsc;
 use rand;
+use tokio::sync::mpsc;
 use winter_paintboard_sdk::{models::PaintOperation, PaintboardClientTrait};
 
 /// Token 工作器
@@ -114,10 +114,7 @@ impl TokenWorker {
             };
 
             if let Err(e) = self.batch_sender.send(operation) {
-                error!(
-                    "Worker {}: 发送操作到 Batcher 失败: {}",
-                    self.worker_id, e
-                );
+                error!("Worker {}: 发送操作到 Batcher 失败: {}", self.worker_id, e);
                 // 发送失败，意味着 Batcher 已关闭，将 Token 标记为失败以立即释放
                 token_lease.mark_failed();
             } else {
