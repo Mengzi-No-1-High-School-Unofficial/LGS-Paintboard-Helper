@@ -1,11 +1,7 @@
 use crate::basic_client::ws_provider::ws_connection::WsConnection;
 use crate::basic_client::ws_provider::ws_reconnect::WsReconnectManager;
 use crate::basic_client::ws_provider::ws_response_tracker::WsResponseTracker;
-use crate::{
-    config::Config,
-    models::ProtocolMessage,
-    event,
-};
+use crate::{config::Config, event, models::ProtocolMessage};
 use color_eyre::eyre::Context;
 use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -135,7 +131,10 @@ impl WsMessageHandler {
             ProtocolMessage::PaintEvent { pos, color } => {
                 // 广播他人绘制事件到事件总线
                 event::post(event::PaintEvent::OtherPaint { pos, color });
-                debug!("🎨 收到他人绘制事件并广播: pos={:?}, color={:?}", pos, color);
+                debug!(
+                    "🎨 收到他人绘制事件并广播: pos={:?}, color={:?}",
+                    pos, color
+                );
             }
 
             ProtocolMessage::Unknown { opcode, data } => {

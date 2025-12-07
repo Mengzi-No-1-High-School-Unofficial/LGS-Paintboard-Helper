@@ -6,13 +6,10 @@
 use color_eyre::eyre::Ok;
 use color_eyre::Report;
 use log::{debug, error, info, trace, warn};
-use rustc_hash::FxHashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::{interval, sleep, Instant};
-use winter_paintboard_sdk::Pos;
-use parking_lot::RwLock;
+use tokio::time::{interval, sleep};
 
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
@@ -23,7 +20,7 @@ use crate::app::multi_token::pixel_queue::PixelQueue;
 use crate::app::multi_token::token_manager::{TokenInfo, TokenManager};
 use crate::app::multi_token::token_worker::TokenWorker;
 use crate::app::utils::get_token_with_access_key;
-use winter_paintboard_sdk::{basic_client::AsyncClient, config::Config, PaintboardClientTrait};
+use winter_paintboard_sdk::{basic_client::AsyncClient, config::Config};
 
 /// 多 Token 绘制服务
 ///
@@ -197,7 +194,7 @@ impl MultiTokenService {
         let mut batcher = PaintBatcher::new(
             batch_receiver,
             self.shared_client.clone(),
-            self.batch_size, // 批处理大小限制
+            self.batch_size,            // 批处理大小限制
             Duration::from_millis(200), // 时间限制
         );
 
@@ -417,7 +414,14 @@ impl MultiTokenService {
             (uid, Some(access_key), None) => {
                 debug!("为 UID {} 获取 Token...", uid);
 
-                let token = get_token_with_access_key(uid, &access_key).await?;
+                let token = get_token_with_access_key(uid, &access_key).await;
+
+                if let Err(e) = token {
+                    error!("获取 Token 失败: {:?}", e);
+                    return Err(e);
+                }
+
+                let token = token.unwrap();
 
                 info!("获取到 UID {} 的 Token", uid);
 
@@ -459,15 +463,22 @@ impl MultiTokenService {
         let mut tokens = Vec::new();
 
         for entry in token_config.tokens.clone() {
-            let token = Self::get_token_from_entry(&entry).await?;
+            let token = Self::get_token_from_entry(&entry).await;
+
+            if let Err(e) = token {
+                tracing::error!("获取 Token 失败: {}", e);
+                eprintln!("{:?}", e);
+                continue;
+            }
+
+            let token = token.unwrap();
+
             tokens.push(TokenInfo {
                 uid: entry.uid,
                 token,
                 last_paint_time: None,
                 is_available: true,
             });
-
-            sleep(Duration::from_millis(1000)).await; // 避免触发 429 Rate Limit
         }
 
         Ok(tokens)
@@ -503,12 +514,21 @@ impl MultiTokenService {
             let metrics = metrics.unwrap();
 
             info!("=== 全局绘制指标 ===");
-            info!("总绘制像素数: {}", metrics.global.total_painted_pixels.load(Ordering::Relaxed));
+            info!(
+                "总绘制像素数: {}",
+                metrics.global.total_painted_pixels.load(Ordering::Relaxed)
+            );
             info!(
                 "成功绘制像素数: {}",
-                metrics.global.successful_painted_pixels.load(Ordering::Relaxed)
+                metrics
+                    .global
+                    .successful_painted_pixels
+                    .load(Ordering::Relaxed)
             );
-            info!("失败绘制像素数: {}", metrics.global.failed_painted_pixels.load(Ordering::Relaxed));
+            info!(
+                "失败绘制像素数: {}",
+                metrics.global.failed_painted_pixels.load(Ordering::Relaxed)
+            );
             info!("===================");
 
             for token_info in token_manager.get_all_tokens() {
@@ -518,12 +538,20 @@ impl MultiTokenService {
                 if let Some(token_metrics) = token_metrics {
                     let token_metrics = token_metrics.value();
                     info!("--- Token UID: {} 指标 ---", uid);
-                    info!("总绘制像素数: {}", token_metrics.painted_pixels.load(Ordering::Relaxed));
+                    info!(
+                        "总绘制像素数: {}",
+                        token_metrics.painted_pixels.load(Ordering::Relaxed)
+                    );
                     info!(
                         "成功绘制像素数: {}",
-                        token_metrics.successful_painted_pixels.load(Ordering::Relaxed)
+                        token_metrics
+                            .successful_painted_pixels
+                            .load(Ordering::Relaxed)
                     );
-                    info!("失败绘制像素数: {}", token_metrics.failed_painted_pixels.load(Ordering::Relaxed));
+                    info!(
+                        "失败绘制像素数: {}",
+                        token_metrics.failed_painted_pixels.load(Ordering::Relaxed)
+                    );
                     info!(
                         "绘制速率 (像素/分钟): {:.2}",
                         token_metrics.get_recent_paint_rate()
@@ -535,7 +563,4 @@ impl MultiTokenService {
             }
         }
     }
-
-
-
 }

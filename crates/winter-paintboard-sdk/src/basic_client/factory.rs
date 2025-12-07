@@ -1,4 +1,6 @@
-use crate::{config::Config, error::PaintboardError, basic_client::AsyncClient, PaintboardClientTrait};
+use crate::{
+    basic_client::AsyncClient, config::Config, error::PaintboardError, PaintboardClientTrait,
+};
 
 /// 客户端类型枚举
 #[derive(Debug, Clone, Copy)]

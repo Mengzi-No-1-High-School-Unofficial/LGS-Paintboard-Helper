@@ -3,9 +3,10 @@
 //! 该模块实现了线程安全的优先级像素队列，用于管理待绘制的像素，
 //! 支持按优先级排序和并发访问。
 
+use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use std::collections::BinaryHeap;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 use crate::app::multi_token::config::PriorityPixel;
 
@@ -98,10 +99,8 @@ impl PixelQueue {
         let mut queue = self.queue.lock();
 
         // 创建现有像素的 HashMap（避免在重建期间的竞态条件）
-        let mut pixel_map: std::collections::HashMap<
-            winter_paintboard_sdk::models::Pos,
-            PriorityPixel,
-        > = queue.iter().cloned().map(|p| (p.pos, p)).collect();
+        let mut pixel_map: FxHashMap<winter_paintboard_sdk::models::Pos, PriorityPixel> =
+            queue.iter().cloned().map(|p| (p.pos, p)).collect();
 
         // 合并新像素（新优先级覆盖旧优先级）
         for pixel in new_pixels {

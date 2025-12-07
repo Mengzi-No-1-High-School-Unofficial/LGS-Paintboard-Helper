@@ -11,10 +11,14 @@ use tokio::sync::OnceCell;
 static GLOBAL_CLIENT: OnceCell<Arc<crate::basic_client::AsyncClient>> = OnceCell::const_new();
 
 /// 获取全局 AsyncClient 实例
-pub async fn get_global_client(config: Config) -> Result<Arc<crate::basic_client::AsyncClient>, crate::error::PaintboardError> {
+pub async fn get_global_client(
+    config: Config,
+) -> Result<Arc<crate::basic_client::AsyncClient>, crate::error::PaintboardError> {
     GLOBAL_CLIENT
         .get_or_try_init(|| async move {
-            Ok(Arc::new(crate::basic_client::AsyncClient::new_impl(config).await?))
+            Ok(Arc::new(
+                crate::basic_client::AsyncClient::new_impl(config).await?,
+            ))
         })
         .await
         .map(|client| client.clone())
@@ -35,7 +39,8 @@ pub mod utils;
 
 /// 从客户端模块导出主要客户端类型和工厂函数。
 pub use basic_client::{
-    create_client_by_type, AsyncClient, ClientType, HttpProvider, PaintboardClientTrait, AsyncWsProvider,
+    create_client_by_type, AsyncClient, AsyncWsProvider, ClientType, HttpProvider,
+    PaintboardClientTrait,
 };
 /// 导出SDK的统一错误类型。
 pub use error::PaintboardError;

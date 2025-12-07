@@ -5,8 +5,8 @@
 use log::info;
 use winter_paintboard_sdk::{config::Config, get_global_client, PaintboardClientTrait};
 
-use winter_paintboard_sdk::Rgb;
 use color_eyre::Report;
+use winter_paintboard_sdk::Rgb;
 
 /// 通过访问密钥获取认证 Token
 ///
@@ -21,14 +21,19 @@ use color_eyre::Report;
 ///
 /// * `Ok(String)` - 成功获取的认证Token
 /// * `Err` - 获取过程中发生错误
-pub async fn get_token_with_access_key(
-    uid: u32,
-    access_key: &str,
-) -> Result<String, Report> {
+pub async fn get_token_with_access_key(uid: u32, access_key: &str) -> Result<String, Report> {
     info!("正在使用 UID 和访问密钥获取 Token...");
     let config = Config::default();
     let http_client = get_global_client(config).await?;
-    let token = http_client.get_token(uid, access_key).await?;
+    let token = http_client.get_token(uid, access_key).await;
+
+    if let Err(e) = token {
+        tracing::error!("获取 Token 失败: {:?}", e);
+        return Err(e.into());
+    }
+
+    let token = token.unwrap();
+
     info!("成功获取 Token: {}...", &token[..8]); // 显示开头部分
     Ok(token)
 }

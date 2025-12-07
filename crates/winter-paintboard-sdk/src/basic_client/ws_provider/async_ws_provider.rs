@@ -1,14 +1,15 @@
 use crate::{
     config::{Config, ConnectionMode},
     error::PaintboardError,
-    models::{
-        OpCode, PaintOperation, PaintResult, PaintStatus, Pos, ProtocolMessage, Rgb,
-    },
+    models::{OpCode, PaintOperation, PaintResult, PaintStatus, Pos, ProtocolMessage, Rgb},
 };
 use color_eyre::Report;
 use futures::{SinkExt, StreamExt};
 use std::collections::VecDeque;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex, Notify, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration, Instant};
@@ -257,10 +258,12 @@ impl WsActor {
                 *self.connected.lock().await = false;
                 self.ws_sender = None;
                 self.ws_receiver_stream = None;
-                
+
                 if !self.reconnecting.load(Ordering::Relaxed) {
                     debug!("检测到连接断开，发送 StartReconnect 消息");
-                    let _ = self.sender.send(WsActorMessage::Connection(ConnectionRequest::StartReconnect));
+                    let _ = self.sender.send(WsActorMessage::Connection(
+                        ConnectionRequest::StartReconnect,
+                    ));
                 }
             }
             ConnectionRequest::StartReconnect => {
@@ -338,9 +341,8 @@ impl WsActor {
         debug!("尝试发送二进制消息，数据大小: {} 字节", data.len());
 
         if !*self.connected.lock().await || self.reconnecting.load(Ordering::Relaxed) {
-            return Err(
-                Report::new(PaintboardError::ConnectionClosed).wrap_err("无法发送消息，连接未建立或正在重连")
-            );
+            return Err(Report::new(PaintboardError::ConnectionClosed)
+                .wrap_err("无法发送消息，连接未建立或正在重连"));
         }
 
         if let Some(ref mut ws_sender) = self.ws_sender {
@@ -738,7 +740,6 @@ impl WsActor {
                         ));
                     }
                 }
-
             }
         });
 
@@ -778,7 +779,9 @@ impl WsActor {
                 let (response_tx, response_rx) = oneshot::channel();
                 let message = WsActorMessage::Connection(ConnectionRequest::Connect(response_tx));
                 if sender.send(message).is_err() {
-                    error!("Actor channel closed, cannot attempt reconnect. Stopping reconnect task.");
+                    error!(
+                        "Actor channel closed, cannot attempt reconnect. Stopping reconnect task."
+                    );
                     reconnecting_clone.store(false, Ordering::Relaxed);
                     break;
                 }
@@ -1010,16 +1013,18 @@ impl AsyncWsProvider {
         // Ensure connected
         if self.reconnecting.load(Ordering::Relaxed) {
             debug!("paint_with_auth() - 正在重连 (paint_id: {})", paint_id);
-            return Err(Report::new(PaintboardError::ConnectionClosed)
-                .wrap_err("连接正在重连，请稍后重试"));
+            return Err(
+                Report::new(PaintboardError::ConnectionClosed).wrap_err("连接正在重连，请稍后重试")
+            );
         }
 
         if !self.is_connected().await {
             debug!("paint_with_auth() - 连接已断开 (paint_id: {})", paint_id);
             // The reconnect task should be running in the background.
             // We just fail fast here.
-            return Err(Report::new(PaintboardError::ConnectionClosed)
-                .wrap_err("连接已断开，请稍后重试"));
+            return Err(
+                Report::new(PaintboardError::ConnectionClosed).wrap_err("连接已断开，请稍后重试")
+            );
         }
 
         // Create operation with provided authentication
@@ -1156,7 +1161,6 @@ impl AsyncWsProvider {
                     }
                     return Err(PaintboardError::Internal(e.to_string()));
                 }
-
             }
 
             start = i;
