@@ -1,0 +1,138 @@
+warning: /mnt/data/Github/LGS-Paintboard-Helper/Cargo.toml: only one of `license` or `license-file` is necessary
+`license` should be used if the package license can be expressed with a standard SPDX expression.
+`license-file` should be used if the package uses a non-standard license.
+See https://doc.rust-lang.org/cargo/reference/manifest.html#the-license-and-license-file-fields for more information.
+    Checking winter-paintboard-sdk v0.1.0 (/mnt/data/Github/LGS-Paintboard-Helper/crates/winter-paintboard-sdk)
+error: unused imports: `Board`, `Pos`, `Rgb`, `config::Config`, and `error::PaintboardError`
+  --> crates/winter-paintboard-sdk/src/basic_client/mod.rs:25:5
+   |
+25 |     config::Config,
+   |     ^^^^^^^^^^^^^^
+26 |     error::PaintboardError,
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+27 |     models::{Board, Pos, Rgb},
+   |              ^^^^^  ^^^  ^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: field `rate_limiter` is never read
+  --> crates/winter-paintboard-sdk/src/basic_client/ws_provider/async_ws_provider.rs:69:5
+   |
+65 | struct WsActor {
+   |        ------- field in this struct
+...
+69 |     rate_limiter: Arc<WsRateLimiter>,
+   |     ^^^^^^^^^^^^
+   |
+   = note: `-D dead-code` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(dead_code)]`
+
+error: method `current_delay` is never used
+  --> crates/winter-paintboard-sdk/src/basic_client/ws_provider/ws_reconnect.rs:58:12
+   |
+18 | impl WsReconnectStrategy {
+   | ------------------------ method in this implementation
+...
+58 |     pub fn current_delay(&self) -> Duration {
+   |            ^^^^^^^^^^^^^
+
+error: associated items `new` and `current_delay` are never used
+  --> crates/winter-paintboard-sdk/src/basic_client/ws_provider/ws_reconnect.rs:69:12
+   |
+68 | impl WsReconnectManager {
+   | ----------------------- associated items in this implementation
+69 |     pub fn new(initial_delay: Duration, max_delay: Duration) -> Self {
+   |            ^^^
+...
+99 |     pub fn current_delay(&self) -> Duration {
+   |            ^^^^^^^^^^^^^
+
+error: you are using an explicit closure for cloning elements
+  --> crates/winter-paintboard-sdk/src/lib.rs:17:5
+   |
+17 | /     GLOBAL_CLIENT
+18 | |         .get_or_try_init(|| async move {
+19 | |             Ok(Arc::new(
+20 | |                 crate::basic_client::AsyncClient::new_impl(config).await?,
+...  |
+23 | |         .await
+24 | |         .map(|client| client.clone())
+   | |_____________________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#map_clone
+   = note: `-D clippy::map-clone` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::map_clone)]`
+help: consider calling the dedicated `cloned` method
+   |
+17 ~     GLOBAL_CLIENT
+18 +         .get_or_try_init(|| async move {
+19 +             Ok(Arc::new(
+20 +                 crate::basic_client::AsyncClient::new_impl(config).await?,
+21 +             ))
+22 +         })
+23 +         .await.cloned()
+   |
+
+error: this function has too many arguments (9/7)
+   --> crates/winter-paintboard-sdk/src/basic_client/ws_provider/async_ws_provider.rs:117:5
+    |
+117 | /     fn new(
+118 | |         config: Arc<Config>,
+119 | |         response_tracker: Arc<WsResponseTracker>,
+120 | |         reconnect_manager: Arc<TokioMutex<WsReconnectManager>>,
+...   |
+126 | |         sender: mpsc::UnboundedSender<WsActorMessage>,
+127 | |     ) -> Self {
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#too_many_arguments
+    = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: unneeded `return` statement
+   --> crates/winter-paintboard-sdk/src/basic_client/ws_provider/async_ws_provider.rs:297:17
+    |
+297 |                 return true; // 返回 true 表示应该退出
+    |                 ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_return
+    = note: `-D clippy::needless-return` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_return)]`
+help: remove `return`
+    |
+297 -                 return true; // 返回 true 表示应该退出
+297 +                 true// 返回 true 表示应该退出
+    |
+
+error: non-binding `let` on a future
+    --> crates/winter-paintboard-sdk/src/basic_client/ws_provider/async_ws_provider.rs:1121:21
+     |
+1121 |                     let _ = self.response_tracker.register_request(*paint_id).await;
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider awaiting the future or dropping explicitly with `std::mem::drop`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#let_underscore_future
+     = note: `-D clippy::let-underscore-future` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::let_underscore_future)]`
+
+error: non-binding `let` on a future
+    --> crates/winter-paintboard-sdk/src/basic_client/ws_provider/async_ws_provider.rs:1192:13
+     |
+1192 |             let _ = self.response_tracker.register_request(*paint_id).await;
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider awaiting the future or dropping explicitly with `std::mem::drop`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#let_underscore_future
+
+error: redundant closure
+  --> crates/winter-paintboard-sdk/src/basic_client/ws_provider/ws_response_tracker.rs:23:62
+   |
+23 |         let tracker = GLOBAL_WS_RESPONSE_TRACKER.get_or_init(|| WsResponseTracker::new_local());
+   |                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the associated function itself: `WsResponseTracker::new_local`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#redundant_closure
+   = note: `-D clippy::redundant-closure` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::redundant_closure)]`
+
+error: could not compile `winter-paintboard-sdk` (lib) due to 10 previous errors

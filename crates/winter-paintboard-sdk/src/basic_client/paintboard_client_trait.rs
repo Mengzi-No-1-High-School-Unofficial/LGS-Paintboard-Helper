@@ -101,9 +101,9 @@ pub trait PaintboardClientTrait {
     /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
     async fn paint_batch_with_auth(
         &self,
-        operations: Vec<(Pos, Rgb)>,
-        uid: u32,
-        token: &str,
+        _operations: Vec<(Pos, Rgb)>,
+        _uid: u32,
+        _token: &str,
     ) -> Result<(), PaintboardError> {
         // 默认实现：如果实现者没有提供此方法，则返回错误
         Err(PaintboardError::auth(
@@ -120,7 +120,7 @@ pub trait PaintboardClientTrait {
     /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
     async fn paint_batch_multi_token(
         &self,
-        operations: Vec<PaintOperation>,
+        _operations: Vec<PaintOperation>,
     ) -> Result<(), PaintboardError> {
         // 默认实现：如果实现者没有提供此方法，则返回错误
         Err(PaintboardError::auth(

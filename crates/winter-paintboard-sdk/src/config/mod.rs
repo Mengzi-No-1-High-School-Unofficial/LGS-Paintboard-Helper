@@ -46,6 +46,7 @@ impl Config {
     /// - `batch_timeout`: 批量操作超时。
     /// - `max_batch_size`: 最大批量大小。
     /// - `connection_mode`: 连接模式。
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         api_base_url: String,
         ws_url: String,

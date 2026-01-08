@@ -38,6 +38,7 @@ impl PixelQueue {
     /// # 参数
     ///
     /// * `pixels` - 要添加的像素列表
+    #[allow(dead_code)]
     pub fn reset_and_push(&self, pixels: Vec<PriorityPixel>) {
         let mut queue = self.queue.lock();
         queue.clear();
@@ -63,6 +64,7 @@ impl PixelQueue {
     /// # 返回值
     ///
     /// 返回队列中像素的数量
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         let queue = self.queue.lock();
         queue.len()
@@ -73,6 +75,7 @@ impl PixelQueue {
     /// # 返回值
     ///
     /// 如果队列为空返回true，否则返回false
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         let queue = self.queue.lock();
         queue.is_empty()
@@ -83,6 +86,7 @@ impl PixelQueue {
     /// # 返回值
     ///
     /// 返回队列中所有像素的排序列表
+    #[allow(dead_code)]
     pub fn get_all_pixels(&self) -> Vec<PriorityPixel> {
         let queue = self.queue.lock();
         queue.clone().into_sorted_vec().into_iter().rev().collect()
@@ -97,6 +101,12 @@ impl PixelQueue {
     /// * `new_pixels` - 要合并的新像素列表
     pub fn merge_updates(&self, new_pixels: Vec<PriorityPixel>) {
         let mut queue = self.queue.lock();
+
+        // 如果新像素数量很多（例如超过当前队列一半），直接替换可能更高效
+        if new_pixels.len() > queue.len() / 2 {
+            *queue = BinaryHeap::from(new_pixels);
+            return;
+        }
 
         // 创建现有像素的 HashMap（避免在重建期间的竞态条件）
         let mut pixel_map: FxHashMap<winter_paintboard_sdk::models::Pos, PriorityPixel> =

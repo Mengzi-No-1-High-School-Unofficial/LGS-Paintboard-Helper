@@ -1,0 +1,119 @@
+warning: /mnt/data/Github/LGS-Paintboard-Helper/Cargo.toml: only one of `license` or `license-file` is necessary
+`license` should be used if the package license can be expressed with a standard SPDX expression.
+`license-file` should be used if the package uses a non-standard license.
+See https://doc.rust-lang.org/cargo/reference/manifest.html#the-license-and-license-file-fields for more information.
+    Checking lgs-paintboard v0.1.0 (/mnt/data/Github/LGS-Paintboard-Helper)
+error: this import is redundant
+ --> src/main.rs:8:1
+  |
+8 | use tracing_subscriber;
+  | ^^^^^^^^^^^^^^^^^^^^^^^ help: remove it entirely
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#single_component_path_imports
+  = note: `-D clippy::single-component-path-imports` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::single_component_path_imports)]`
+
+error: unused import: `config::Config`
+  --> src/app/multi_token/token_worker.rs:15:29
+   |
+15 | use winter_paintboard_sdk::{config::Config, models::PaintOperation};
+   |                             ^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unneeded `return` statement
+   --> src/app/metrics/mod.rs:230:13
+    |
+230 |             return 0.0;
+    |             ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_return
+    = note: `-D clippy::needless-return` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_return)]`
+help: remove `return`
+    |
+230 -             return 0.0;
+230 +             0.0
+    |
+
+error: explicit call to `.into_iter()` in function argument accepting `IntoIterator`
+   --> src/app/multi_token/config.rs:96:18
+    |
+ 96 |             .zip(uids.into_iter())
+    |                  ^^^^------------
+    |                      |
+    |                      help: consider removing the `.into_iter()`
+    |
+note: this parameter accepts any `IntoIterator`, so you don't need to call `.into_iter()`
+   --> /home/xyber-nova/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:616:12
+    |
+616 |         U: IntoIterator,
+    |            ^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#useless_conversion
+    = note: `-D clippy::useless-conversion` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::useless_conversion)]`
+
+error: non-canonical implementation of `partial_cmp` on an `Ord` type
+   --> src/app/multi_token/config.rs:134:1
+    |
+134 | /  impl PartialOrd for PriorityPixel {
+135 | |      fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    | | _______________________________________________________________________-
+136 | ||         // 优先级高的排在前面（大顶堆）
+137 | ||         // other.priority.partial_cmp(&self.priority)
+138 | ||         self.priority.partial_cmp(&other.priority)
+139 | ||     }
+    | ||_____- help: change this to: `{ Some(self.cmp(other)) }`
+140 | |  }
+    | |__^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#non_canonical_partial_ord_impl
+    = note: `-D clippy::non-canonical-partial-ord-impl` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::non_canonical_partial_ord_impl)]`
+
+error: this function has too many arguments (8/7)
+  --> src/app/multi_token/multi_token_service.rs:78:5
+   |
+78 | /     pub async fn new(
+79 | |         token_config: TokenConfig,
+80 | |         ws_url: Option<String>,
+81 | |         local_board: Arc<LocalBoard>,
+...  |
+86 | |         batch_size: usize,
+87 | |     ) -> Result<Self, Report> {
+   | |_____________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#too_many_arguments
+   = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: this function has too many arguments (10/7)
+   --> src/app/multi_token/multi_token_service.rs:121:5
+    |
+121 | /     pub async fn with_canny_thresholds(
+122 | |         token_config: TokenConfig,
+123 | |         ws_url: Option<String>,
+124 | |         local_board: Arc<LocalBoard>,
+...   |
+131 | |         batch_size: usize,
+132 | |     ) -> Result<Self, Report> {
+    | |_____________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#too_many_arguments
+
+error: this function has too many arguments (17/7)
+   --> src/app/mod.rs:133:1
+    |
+133 | / pub async fn run_multi_token_mode(
+134 | |     config_path: PathBuf,
+135 | |     ws_url: Option<String>,
+136 | |     image: PathBuf,
+...   |
+150 | |     batch_size: usize,
+151 | | ) -> Result<(), Box<dyn std::error::Error>> {
+    | |___________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#too_many_arguments
+
+error: could not compile `lgs-paintboard` (bin "lgs-paintboard") due to 8 previous errors

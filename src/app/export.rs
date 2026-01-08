@@ -4,11 +4,11 @@
 //! 和热点图（显示绘制频率的可视化图）。支持定时导出功能。
 
 use image::{Rgb, RgbImage};
-use log::{error, info, warn};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
+use tracing::{error, info, warn};
 
 use crate::app::board_sync::{BoardSyncManager, LocalBoard};
 

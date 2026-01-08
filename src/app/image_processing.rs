@@ -5,10 +5,10 @@
 
 use color_eyre::Report;
 use image::{imageops::FilterType, open, GrayImage, RgbaImage};
-use imageproc::edges::{self, canny};
+use imageproc::edges::canny;
 use imageproc::filter::gaussian_blur_f32;
-use log::{debug, info};
 use rustc_hash::FxHashMap;
+use tracing::{debug, info};
 
 /// 表示处理后的图像数据，用于不同缩放级别的绘制操作
 ///
@@ -23,8 +23,10 @@ pub struct ProcessedImageData {
     /// 完整尺寸的绘制操作序列，包含位置和颜色信息
     pub full_scale_operations: Vec<(winter_paintboard_sdk::Pos, winter_paintboard_sdk::Rgb)>,
     /// 不同缩放级别的绘制操作序列，用于渐进式绘制
+    #[allow(dead_code)]
     pub scale_level_operations: Vec<Vec<(winter_paintboard_sdk::Pos, winter_paintboard_sdk::Rgb)>>,
     /// 网格图算法计算出的像素优先级映射，优先级值越高表示越重要
+    #[allow(dead_code)]
     pub pixel_canny_priorities: FxHashMap<winter_paintboard_sdk::Pos, f64>,
 }
 

@@ -17,6 +17,7 @@ pub struct WsReconnectStrategy {
 
 impl WsReconnectStrategy {
     /// Create a new strategy with initial and max delays
+    #[allow(dead_code)]
     pub fn new(initial_delay: Duration, max_delay: Duration) -> Self {
         Self {
             should_reconnect: Arc::new(AtomicBool::new(true)),
@@ -55,6 +56,7 @@ impl WsReconnectStrategy {
     }
 
     /// Get current delay without advancing
+    #[allow(dead_code)]
     pub fn current_delay(&self) -> Duration {
         self.current_delay
     }
@@ -66,6 +68,7 @@ pub struct WsReconnectManager {
 }
 
 impl WsReconnectManager {
+    #[allow(dead_code)]
     pub fn new(initial_delay: Duration, max_delay: Duration) -> Self {
         Self {
             strategy: WsReconnectStrategy::new(initial_delay, max_delay),
@@ -86,18 +89,22 @@ impl WsReconnectManager {
         self.strategy.disable_reconnect();
     }
 
+    #[allow(dead_code)]
     pub async fn next_delay(&mut self) -> Duration {
         self.strategy.next_delay()
     }
 
+    #[allow(dead_code)]
     pub async fn reset(&mut self) {
         self.strategy.reset();
     }
 
+    #[allow(dead_code)]
     pub fn current_delay(&self) -> Duration {
         self.strategy.current_delay()
     }
 
+    #[allow(dead_code)]
     pub async fn reconnect(&mut self, connection: Arc<WsConnection>) -> Result<()> {
         if self.should_reconnect() {
             let delay = self.next_delay().await;

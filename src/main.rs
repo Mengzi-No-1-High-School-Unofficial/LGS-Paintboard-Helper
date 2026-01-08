@@ -5,7 +5,7 @@
 
 use clap::Parser;
 use tracing::info;
-use tracing_subscriber;
+// use tracing_subscriber; // 已在全局初始化中处理
 
 /// 应用程序模块，包含所有核心功能
 mod app;

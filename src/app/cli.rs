@@ -136,7 +136,8 @@ pub enum Commands {
     },
 }
 
-fn parse_client_type(s: &str) -> Result<winter_paintboard_sdk::ClientType, String> {
+#[allow(dead_code)]
+fn parse_client_type(s: &str) -> std::result::Result<winter_paintboard_sdk::ClientType, String> {
     match s.to_lowercase().as_str() {
         "pool" | "connection_pool" => unimplemented!("Connection Pool 不存在"),
         "basic" => Ok(winter_paintboard_sdk::ClientType::Basic),
