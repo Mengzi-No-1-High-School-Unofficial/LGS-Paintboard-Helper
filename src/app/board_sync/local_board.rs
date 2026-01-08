@@ -229,13 +229,15 @@ impl LocalBoard {
         let removals_len = removals.len();
         let has_changes = updates_len > 0 || additions_len > 0 || removals_len > 0;
 
-        // 执行实际的更新操作
+        // 执行实际的更新操作并标记为最近变更
         for (pos, new_status) in updates {
             self.pixels.insert(pos, new_status);
+            self.mark_changed(pos); // 标记为最近变更（用于增量比对）
         }
 
         for (pos, new_status) in additions {
             self.pixels.insert(pos, new_status);
+            self.mark_changed(pos); // 标记为最近变更（用于增量比对）
         }
 
         for pos in removals {
