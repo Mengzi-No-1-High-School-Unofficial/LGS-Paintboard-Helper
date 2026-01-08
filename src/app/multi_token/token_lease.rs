@@ -4,9 +4,8 @@
 //! 包括状态跟踪和冷却时间管理。
 
 use super::token_manager::TokenManager;
-use parking_lot::Mutex;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Token 状态枚举
 ///

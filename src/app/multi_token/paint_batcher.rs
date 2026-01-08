@@ -53,7 +53,7 @@ impl PaintBatcher {
     ///
     /// 此方法将持续运行，直到所有发送端都关闭。
     pub async fn run(&mut self) {
-        log::info!(
+        tracing::info!(
             "PaintBatcher 启动，批处理大小限制: {}, 时间限制: {:?}",
             self.batch_size_limit,
             self.time_limit
@@ -63,12 +63,24 @@ impl PaintBatcher {
         loop {
             tokio::select! {
                 // 事件 1: 从 Worker 收到一个新的绘制操作
-                Some(op) = self.receiver.recv() => {
-                    self.batch.push(op);
-                    if self.batch.len() >= self.batch_size_limit {
-                        self.flush_and_spawn();
-                        // 刷新后重置定时器，避免立即因超时而再次刷新
-                        interval.reset();
+                res = self.receiver.recv() => {
+                    match res {
+                        Some(op) => {
+                            self.batch.push(op);
+                            if self.batch.len() >= self.batch_size_limit {
+                                self.flush_and_spawn();
+                                // 刷新后重置定时器，避免立即因超时而再次刷新
+                                interval.reset();
+                            }
+                        }
+                        None => {
+                             // 通道关闭，处理最后剩下的批次并退出
+                             if !self.batch.is_empty() {
+                                 self.flush_and_spawn();
+                             }
+                             tracing::info!("PaintBatcher 通道已关闭，退出循环");
+                             return;
+                        }
                     }
                 }
 
@@ -78,9 +90,6 @@ impl PaintBatcher {
                         self.flush_and_spawn();
                     }
                 }
-
-                // 通道关闭后，select! 将不会再进入 recv() 分支。
-                // 我们依赖定时器来处理最后的批次，并保持任务存活以接收未来可能的新任务。
             }
         }
     }
@@ -98,17 +107,17 @@ impl PaintBatcher {
         // 生成一个新任务来发送批处理
         tokio::spawn(async move {
             let batch_len = batch_to_send.len();
-            log::debug!("刷新批处理，操作数: {}", batch_len);
+            tracing::debug!("刷新批处理，操作数: {}", batch_len);
 
             let result = client.paint_batch_multi_token(batch_to_send).await;
 
             match result {
                 Ok(_) => {
-                    log::info!("成功发送 {} 个绘制操作的批处理", batch_len);
+                    tracing::info!("成功发送 {} 个绘制操作的批处理", batch_len);
                 }
                 Err(e) => {
                     // 整个批次发送失败，例如网络错误
-                    log::error!("批量发送失败: {:?}", e);
+                    tracing::error!("批量发送失败: {:?}", e);
                 }
             }
         });

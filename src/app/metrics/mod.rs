@@ -39,7 +39,7 @@ pub struct GlobalMetricsData {
 /// 包含单个Token的绘制统计信息和近期绘制记录
 pub struct TokenMetricsData {
     /// 关联的 UID
-    pub uid: u32,
+    pub _uid: u32,
     /// 绘制像素数
     pub painted_pixels: AtomicU64,
     /// 成功绘制像素数
@@ -94,6 +94,7 @@ impl Metrics {
     /// # 返回值
     ///
     /// 返回指定Token指标数据的Arc引用
+    #[allow(dead_code)]
     pub fn get_token_metrics(&self, uid: u32) -> Arc<TokenMetricsData> {
         self.tokens
             .entry(uid)
@@ -109,6 +110,7 @@ impl Metrics {
     ///
     /// * `uid` - 用户ID
     /// * `pos` - 绘制位置
+    #[allow(dead_code)]
     pub fn record_global_paint_success(&self, uid: u32, pos: Pos) {
         self.global
             .total_painted_pixels
@@ -129,6 +131,7 @@ impl Metrics {
     ///
     /// * `uid` - 用户ID
     /// * `pos` - 绘制位置
+    #[allow(dead_code)]
     pub fn record_global_paint_failure(&self, uid: u32, pos: Pos) {
         self.global
             .total_painted_pixels
@@ -152,9 +155,9 @@ impl TokenMetricsData {
     /// # 返回值
     ///
     /// 返回初始化的Token指标数据实例
-    pub fn new(uid: u32) -> Self {
+    pub fn new(_uid: u32) -> Self {
         TokenMetricsData {
-            uid,
+            _uid,
             painted_pixels: AtomicU64::new(0),
             successful_painted_pixels: AtomicU64::new(0),
             failed_painted_pixels: AtomicU64::new(0),
@@ -224,7 +227,7 @@ impl TokenMetricsData {
         let last = history.back();
 
         if let (None, None) = (first, last) {
-            return 0.0;
+            0.0
         } else {
             let first = first.unwrap();
             let last = last.unwrap();

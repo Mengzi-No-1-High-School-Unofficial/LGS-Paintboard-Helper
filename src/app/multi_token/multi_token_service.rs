@@ -3,13 +3,11 @@
 //! 该模块实现了多Token并发绘制的核心服务，包括任务调度、像素队列管理、
 //! Token管理、绘制执行等功能，使用网格图算法优化绘制优先级。
 
-use color_eyre::eyre::Ok;
 use color_eyre::Report;
-use log::{debug, error, info, trace, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::{interval, sleep};
+use tokio::time::{interval, Duration};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
@@ -76,6 +74,8 @@ impl MultiTokenService {
     ///
     /// * `Ok(MultiTokenService)` - 成功创建的服务实例
     /// * `Err` - 创建过程中发生错误
+    #[allow(dead_code)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         token_config: TokenConfig,
         ws_url: Option<String>,
@@ -119,6 +119,7 @@ impl MultiTokenService {
     ///
     /// * `Ok(MultiTokenService)` - 成功创建的服务实例
     /// * `Err` - 创建过程中发生错误
+    #[allow(clippy::too_many_arguments)]
     pub async fn with_canny_thresholds(
         token_config: TokenConfig,
         ws_url: Option<String>,
@@ -127,8 +128,8 @@ impl MultiTokenService {
         start_x: i32,
         start_y: i32,
         comparison_interval: Duration,
-        canny_low_thresh: f32,
-        canny_high_thresh: f32,
+        _canny_low_thresh: f32,
+        _canny_high_thresh: f32,
         batch_size: usize,
     ) -> Result<Self, Report> {
         // 解析所有 Token（将 access_key 转换为 token）
@@ -146,12 +147,12 @@ impl MultiTokenService {
 
         // 创建 Metrics 打印任务
         let token_manager_clone = token_manager.clone();
-        let stop_signal_clone = Arc::new(AtomicBool::new(false));
+        let stop_signal = Arc::new(AtomicBool::new(false));
         let metrics_handle = {
-            let stop_signal = stop_signal_clone.clone();
+            let stop_signal_for_metrics = stop_signal.clone();
 
             tokio::spawn(async move {
-                Self::print_metrics_loop(token_manager_clone, stop_signal).await;
+                Self::print_metrics_loop(token_manager_clone, stop_signal_for_metrics).await;
             })
         };
 
@@ -165,7 +166,7 @@ impl MultiTokenService {
             target_image,
             start_x,
             start_y,
-            stop_signal: Arc::new(AtomicBool::new(false)),
+            stop_signal,
             comparison_interval,
             token_manager,
             shared_client,
@@ -212,7 +213,7 @@ impl MultiTokenService {
             let worker = TokenWorker::new(i, token_manager, pixel_queue, batch_sender);
             let handle = tokio::spawn(async move {
                 if let Err(e) = worker.run(stop_signal).await {
-                    log::error!("Worker {} 出错: {:?}", i, e);
+                    error!("Worker {} 出错: {:?}", i, e);
                 }
             });
 
@@ -279,6 +280,13 @@ impl MultiTokenService {
             }
         }
 
+        // 等待指标打印循环完成
+        if let Some(handle) = self.metrics_handle.take() {
+            if let Err(e) = handle.await {
+                error!("指标打印循环任务等待错误: {:?}", e);
+            }
+        }
+
         info!("多 Token 服务已停止");
         Ok(())
     }
@@ -296,8 +304,7 @@ impl MultiTokenService {
     /// * `start_y` - 起始Y坐标
     /// * `interval_duration` - 比对间隔时间
     /// * `stop_signal` - 停止信号
-    /// * `local_paint_history` - 本地绘制历史
-    /// * `local_paint_total` - 本地绘制总数
+    #[allow(clippy::too_many_arguments)]
     async fn run_comparison_loop(
         pixel_queue: Arc<PixelQueue>,
         local_board: Arc<LocalBoard>,
@@ -414,14 +421,7 @@ impl MultiTokenService {
             (uid, Some(access_key), None) => {
                 debug!("为 UID {} 获取 Token...", uid);
 
-                let token = get_token_with_access_key(uid, &access_key).await;
-
-                if let Err(e) = token {
-                    error!("获取 Token 失败: {:?}", e);
-                    return Err(e);
-                }
-
-                let token = token.unwrap();
+                let token = get_token_with_access_key(uid, &access_key).await?;
 
                 info!("获取到 UID {} 的 Token", uid);
 
@@ -462,23 +462,21 @@ impl MultiTokenService {
     async fn fetch_tokens(token_config: &TokenConfig) -> Result<Vec<TokenInfo>, Report> {
         let mut tokens = Vec::new();
 
-        for entry in token_config.tokens.clone() {
-            let token = Self::get_token_from_entry(&entry).await;
-
-            if let Err(e) = token {
-                tracing::error!("获取 Token 失败: {}", e);
-                eprintln!("{:?}", e);
-                continue;
+        for entry in &token_config.tokens {
+            match Self::get_token_from_entry(entry).await {
+                Ok(token) => {
+                    tokens.push(TokenInfo {
+                        uid: entry.uid,
+                        token,
+                        last_paint_time: None,
+                        is_available: true,
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("获取 Token 失败 (UID {}): {}", entry.uid, e);
+                    eprintln!("获取 Token 失败 (UID {}): {:?}", entry.uid, e);
+                }
             }
-
-            let token = token.unwrap();
-
-            tokens.push(TokenInfo {
-                uid: entry.uid,
-                token,
-                last_paint_time: None,
-                is_available: true,
-            });
         }
 
         Ok(tokens)

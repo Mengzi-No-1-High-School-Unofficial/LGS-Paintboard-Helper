@@ -61,11 +61,12 @@ enum WsActorMessage {
     Control(ControlRequest),
 }
 
-/// 基于 Actor 模型的 WebSocket 连接
+/// WsActor 消息处理器
 struct WsActor {
     config: Arc<Config>,
     response_tracker: Arc<WsResponseTracker>,
     reconnect_manager: Arc<TokioMutex<WsReconnectManager>>,
+    #[allow(dead_code)]
     rate_limiter: Arc<WsRateLimiter>,
     message_task_ready: Arc<Notify>,
     reconnecting: Arc<AtomicBool>,
@@ -94,8 +95,10 @@ struct WsActor {
     /// 消息处理任务句柄
     message_task_handle: Option<JoinHandle<()>>,
     /// 发送按时间间隔触发的任务句柄
+    #[allow(dead_code)]
     send_pending_packets_by_duration_handle: Option<JoinHandle<()>>,
     /// 发送按大小限制触发的任务句柄
+    #[allow(dead_code)]
     send_pending_packets_by_limit_handle: Option<JoinHandle<()>>,
     /// 清理任务句柄
     cleanup_task_handle: Option<JoinHandle<()>>,
@@ -112,6 +115,7 @@ struct WsActor {
 }
 
 impl WsActor {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         config: Arc<Config>,
         response_tracker: Arc<WsResponseTracker>,
@@ -132,7 +136,7 @@ impl WsActor {
             reconnecting,
             pending_packets,
             receiver,
-            sender: sender.clone(), // Add sender field
+            sender: sender.clone(),
             ws_sender: None,
             ws_receiver_stream: None,
             message_task_handle: None,
@@ -292,7 +296,7 @@ impl WsActor {
         match req {
             ControlRequest::Shutdown(response_tx) => {
                 let _ = response_tx.send(());
-                return true; // 返回 true 表示应该退出
+                true // 返回 true 表示应该退出
             }
         }
     }
@@ -331,7 +335,7 @@ impl WsActor {
                 Ok(())
             }
             Err(e) => {
-                error!("WebSocket 连接失败: {}", e); // Changed from debug to error
+                error!("WebSocket 连接失败: {}", e);
                 Err(PaintboardError::websocket(e.to_string()))
             }
         }
@@ -416,24 +420,23 @@ impl WsActor {
             let _ = ws_sender.close().await;
         }
         *self.connected.lock().await = false;
-        self.ws_receiver_stream = None; // 确保接收端也被清理
+        self.ws_receiver_stream = None;
         Ok(())
     }
 
     async fn start_message_processing_task(&mut self) {
         if let Some(read) = self.ws_receiver_stream.take() {
-            // Take ownership of ws_receiver_stream
             let response_tracker_clone = self.response_tracker.clone();
             let config_clone = self.config.clone();
             let reconnect_manager_clone = self.reconnect_manager.clone();
-            let actor_sender = self.sender.clone(); // Clone the actor's sender for use in the message loop
+            let actor_sender = self.sender.clone();
             let task_handle = tokio::spawn(async move {
                 Self::message_processing_loop(
-                    read, // Pass the read half
+                    read,
                     response_tracker_clone,
                     config_clone,
                     reconnect_manager_clone,
-                    actor_sender.clone(), // Clone again for the loop
+                    actor_sender.clone(),
                 )
                 .await;
                 // After the message loop ends (due to error or close), mark the connection as disconnected
@@ -460,7 +463,7 @@ impl WsActor {
         response_tracker: Arc<WsResponseTracker>,
         _config: Arc<Config>,
         _reconnect_manager: Arc<TokioMutex<WsReconnectManager>>,
-        actor_sender: mpsc::UnboundedSender<WsActorMessage>, // Add actor sender
+        actor_sender: mpsc::UnboundedSender<WsActorMessage>,
     ) {
         loop {
             match ws_stream.next().await {
@@ -476,7 +479,7 @@ impl WsActor {
                                         response_tracker.clone(),
                                         actor_sender.clone(),
                                     )
-                                    .await; // Pass sender to handle_protocol_message
+                                    .await;
                                 }
                             } else {
                                 error!(
@@ -489,11 +492,10 @@ impl WsActor {
                         tokio_tungstenite::tungstenite::protocol::Message::Ping(payload) => {
                             debug!("收到 WebSocket ping (payload: {} 字节)", payload.len());
                             // Send Pong response using the actor's sender
-                            let pong_payload = payload.clone(); // Clone payload
-                            let (response_tx, _) = oneshot::channel(); // Dummy channel, we don't care about the result here
+                            let (response_tx, _) = oneshot::channel();
                             let _ =
                                 actor_sender.send(WsActorMessage::Send(SendRequest::SendPong {
-                                    payload: pong_payload,
+                                    payload,
                                     response_tx,
                                 }));
                         }
@@ -504,7 +506,7 @@ impl WsActor {
 
                         tokio_tungstenite::tungstenite::protocol::Message::Close(frame) => {
                             warn!("收到连接关闭: {:?}", frame);
-                            break; // 退出循环
+                            break;
                         }
 
                         tokio_tungstenite::tungstenite::protocol::Message::Text(text) => {
@@ -517,11 +519,11 @@ impl WsActor {
                 }
                 Some(Err(e)) => {
                     error!("WebSocket 错误: {}", e);
-                    break; // 退出循环
+                    break;
                 }
                 None => {
                     warn!("WebSocket 连接关闭 (收到 None)");
-                    break; // 退出循环
+                    break;
                 }
             }
         }
@@ -530,14 +532,14 @@ impl WsActor {
     async fn handle_protocol_message(
         protocol_msg: ProtocolMessage,
         response_tracker: Arc<WsResponseTracker>,
-        actor_sender: mpsc::UnboundedSender<WsActorMessage>, // Add actor sender
+        actor_sender: mpsc::UnboundedSender<WsActorMessage>,
     ) {
         match protocol_msg {
             ProtocolMessage::HeartbeatPing => {
                 debug!("收到服务器心跳 PING");
                 // Send Heartbeat Pong (0xfb) using the actor's sender
                 let pong_msg = vec![OpCode::HeartbeatPong as u8];
-                let (response_tx, _) = oneshot::channel(); // Dummy channel
+                let (response_tx, _) = oneshot::channel();
                 let _ = actor_sender.send(WsActorMessage::Send(SendRequest::SendBinary {
                     data: pong_msg,
                     response_tx,
@@ -610,12 +612,6 @@ impl WsActor {
         if let Some(handle) = self.message_task_handle.take() {
             handle.abort();
         }
-        if let Some(handle) = self.send_pending_packets_by_duration_handle.take() {
-            handle.abort();
-        }
-        if let Some(handle) = self.send_pending_packets_by_limit_handle.take() {
-            handle.abort();
-        }
         if let Some(handle) = self.cleanup_task_handle.take() {
             handle.abort();
         }
@@ -647,7 +643,7 @@ impl WsActor {
                 let check_conn_msg =
                     WsActorMessage::Connection(ConnectionRequest::IsConnected(is_connected_tx));
 
-                if let Err(_) = actor_sender.send(check_conn_msg) {
+                if actor_sender.send(check_conn_msg).is_err() {
                     continue; // 如果无法发送消息，跳过本次检查
                 }
 
@@ -674,7 +670,6 @@ impl WsActor {
 
                 // 创建一个无效的 PaintRequest 用于健康检查
                 use crate::models::{PaintOperation, Pos, Rgb};
-                use rand;
 
                 let invalid_token = "0000000-00-0000-0000-00000000"; // 无效的 UUID
                 let invalid_uid = 0u32; // 无效的 UID
@@ -687,7 +682,7 @@ impl WsActor {
                     color,
                     token_uid: invalid_uid,
                     token: invalid_token.to_string(),
-                    paint_id: paint_id as u32,
+                    paint_id,
                 };
 
                 let binary_data = operation.to_binary();
@@ -702,7 +697,7 @@ impl WsActor {
                     response_tx: send_response_tx,
                 });
 
-                if let Err(_) = actor_sender.send(message) {
+                if actor_sender.send(message).is_err() {
                     // 发送失败，连接可能已断开
                     // 发送 MarkDisconnected 消息来标记连接断开
                     let _ = actor_sender.send(WsActorMessage::Connection(
@@ -790,7 +785,6 @@ impl WsActor {
                     Ok(Ok(())) => {
                         debug!("重连成功，退出重连任务");
                         reconnect_manager.lock().await.reset().await;
-                        // `reconnecting` is set to false in `connect_internal`
                         break;
                     }
                     Ok(Err(e)) => {
@@ -812,9 +806,11 @@ impl WsActor {
 /// 基于 Actor 模型的 WebSocket 提供者
 #[derive(Clone)]
 pub struct AsyncWsProvider {
+    #[allow(dead_code)]
     config: Arc<Config>,
     response_tracker: Arc<WsResponseTracker>,
     reconnect_manager: Arc<TokioMutex<WsReconnectManager>>,
+    #[allow(dead_code)]
     rate_limiter: Arc<WsRateLimiter>,
     message_task_ready: Arc<Notify>,
     reconnecting: Arc<AtomicBool>,
@@ -822,6 +818,7 @@ pub struct AsyncWsProvider {
     /// 用于向 Actor 发送消息的发送端
     sender: mpsc::UnboundedSender<WsActorMessage>,
     /// Actor 任务句柄
+    #[allow(dead_code)]
     actor_task_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
 }
 
@@ -830,16 +827,13 @@ impl AsyncWsProvider {
     pub async fn new(config: Arc<Config>) -> Result<Self, PaintboardError> {
         let response_tracker = Arc::new(WsResponseTracker::new());
         let reconnect_manager = Arc::new(TokioMutex::new(WsReconnectManager::default()));
-        // 采用与原实现一致的速率：256 rps（注意：原注释存在 120/256 的混淆）
         let rate_limiter = Arc::new(WsRateLimiter::new(256));
         let message_task_ready = Arc::new(Notify::new());
         let reconnecting = Arc::new(AtomicBool::new(false));
         let pending_packets = Arc::new(RwLock::new(VecDeque::new()));
 
-        // 创建与 Actor 通信的通道
         let (sender, receiver) = mpsc::unbounded_channel();
 
-        // 创建 Actor 实例
         let mut actor = WsActor::new(
             config.clone(),
             response_tracker.clone(),
@@ -849,10 +843,9 @@ impl AsyncWsProvider {
             reconnecting.clone(),
             pending_packets.clone(),
             receiver,
-            sender.clone(), // Pass the sender
+            sender.clone(),
         );
 
-        // 启动 Actor 任务
         let actor_handle = tokio::spawn(async move {
             actor.run().await;
         });
@@ -886,7 +879,6 @@ impl AsyncWsProvider {
             .map_err(|_| PaintboardError::Internal("Actor response channel closed".to_string()))?;
 
         if result.is_ok() {
-            // 等待后台消息处理任务真正启动
             debug!("等待后台消息处理任务启动...");
             tokio::time::timeout(Duration::from_secs(5), self.message_task_ready.notified())
                 .await
@@ -929,10 +921,6 @@ impl AsyncWsProvider {
     }
 
     /// 延迟绘画
-    ///
-    /// 将绘画请求放入 [`self.pending_packets`] 中
-    ///
-    /// 如果队列长度超过 [`PENDING_PACKETS_SIZE_LIMIT`] 或者距离上次发送时间大于 [`PENDING_PACKETS_DURATION_MILLS`] 毫秒，则调用 [`send_pending_packets`] 发送（此操作在后台执行）
     pub async fn paint_delayed(
         &self,
         pos: Pos,
@@ -949,7 +937,7 @@ impl AsyncWsProvider {
             color,
             token_uid: uid,
             token: token.to_string(),
-            paint_id: paint_id as u32,
+            paint_id,
         };
 
         let binary_data = operation.to_binary();
@@ -961,7 +949,6 @@ impl AsyncWsProvider {
             pending_packets.push_back(binary_data);
         }
 
-        // 这里的发送将由后台任务处理，paint_delayed 只需要等待响应
         match timeout(Duration::from_secs(10), response_rx).await {
             Ok(Ok(result)) => {
                 debug!("成功接收到绘图结果");
@@ -976,7 +963,6 @@ impl AsyncWsProvider {
                 let removed = self.response_tracker.remove_request(paint_id).await;
                 debug!("清理响应通道结果: {}", removed);
 
-                // 检查连接状态
                 let still_connected = self.is_connected().await;
                 warn!("超时后连接状态: {}", still_connected);
 
@@ -993,7 +979,6 @@ impl AsyncWsProvider {
         uid: u32,
         token: &str,
     ) -> Result<PaintResult, Report> {
-        // Rate limiting: silent drop when limited
         if !self.rate_limiter.check() {
             debug!(
                 "速率限制：paint 请求被丢弃，位置: ({}, {}), 颜色: ({}, {}, {})",
@@ -1007,10 +992,8 @@ impl AsyncWsProvider {
             });
         }
 
-        // Generate unique paint id first (needed for logging)
         let paint_id = rand::random::<u32>();
 
-        // Ensure connected
         if self.reconnecting.load(Ordering::Relaxed) {
             debug!("paint_with_auth() - 正在重连 (paint_id: {})", paint_id);
             return Err(
@@ -1020,25 +1003,21 @@ impl AsyncWsProvider {
 
         if !self.is_connected().await {
             debug!("paint_with_auth() - 连接已断开 (paint_id: {})", paint_id);
-            // The reconnect task should be running in the background.
-            // We just fail fast here.
             return Err(
                 Report::new(PaintboardError::ConnectionClosed).wrap_err("连接已断开，请稍后重试")
             );
         }
 
-        // Create operation with provided authentication
         let operation = PaintOperation {
             pos,
             color,
             token_uid: uid,
             token: token.to_string(),
-            paint_id: paint_id as u32,
+            paint_id,
         };
 
         let binary_data = operation.to_binary();
 
-        // 单次绘图大小检查（理论上不会超过，但为完整性添加）
         if binary_data.len() > MAX_PACKET_SIZE {
             return Err(Report::new(PaintboardError::invalid_data(format!(
                 "绘图消息大小 {} 字节超过限制 {} 字节 ({}KB)",
@@ -1054,17 +1033,14 @@ impl AsyncWsProvider {
             &binary_data[..std::cmp::min(10, binary_data.len())]
         );
 
-        // Register response receiver
         debug!("注册响应追踪器，paint_id: {}", paint_id);
         let response_rx = self.response_tracker.register_request(paint_id).await;
 
-        // Send binary
         debug!("准备发送绘图消息，paint_id: {}", paint_id);
         self.send_binary(binary_data).await?;
 
         debug!("绘图消息已发送，等待响应 (paint_id: {})", paint_id);
 
-        // Wait for response with timeout
         match timeout(Duration::from_secs(10), response_rx).await {
             Ok(Ok(result)) => {
                 debug!("成功接收到绘图结果");
@@ -1079,7 +1055,6 @@ impl AsyncWsProvider {
                 let removed = self.response_tracker.remove_request(paint_id).await;
                 debug!("清理响应通道结果: {}", removed);
 
-                // 检查连接状态
                 let still_connected = self.is_connected().await;
                 warn!("超时后连接状态: {}", still_connected);
 
@@ -1102,17 +1077,15 @@ impl AsyncWsProvider {
             return Ok(());
         }
 
-        // Rate limiting: treat batch as single packet
         if !self.rate_limiter.check() {
             debug!("速率限制：paint_batch 请求被丢弃，操作数量: {}", ops_count);
             return Ok(());
         }
 
-        // 分批处理
         let mut start = 0;
         while start < operations.len() {
             let mut all_binary = Vec::new();
-            let mut paint_ids = Vec::new(); // 存储paint_id用于清理
+            let mut paint_ids = Vec::new();
 
             let mut current_size = 0;
             let mut i = start;
@@ -1124,11 +1097,10 @@ impl AsyncWsProvider {
                     color,
                     token_uid: uid,
                     token: token.to_string(),
-                    paint_id: paint_id as u32,
+                    paint_id,
                 };
                 let op_binary = op.to_binary();
                 if current_size + op_binary.len() > MAX_PACKET_SIZE && !all_binary.is_empty() {
-                    // 如果加上当前操作会超过大小限制，且当前批次不为空，则停止添加
                     break;
                 }
                 all_binary.extend(op_binary.clone());
@@ -1147,15 +1119,13 @@ impl AsyncWsProvider {
                     return Err(PaintboardError::ConnectionClosed);
                 }
 
-                // 为当前批次的操作注册请求
                 for paint_id in &paint_ids {
-                    let _ = self.response_tracker.register_request(*paint_id).await;
+                    self.response_tracker.register_request(*paint_id).await;
                 }
 
                 let send_result = self.send_binary(all_binary).await;
                 if let Err(e) = send_result {
                     error!("发送批量消息失败: {:?}", e);
-                    // 发送失败时清理已注册的请求
                     for paint_id in &paint_ids {
                         let _ = self.response_tracker.remove_request(*paint_id).await;
                     }
@@ -1171,7 +1141,6 @@ impl AsyncWsProvider {
 
     /// Properly disconnect and clean up the WebSocket connection
     pub async fn disconnect(&self) -> Result<(), PaintboardError> {
-        // Prevent reconnection attempts
         {
             let rm = self.reconnect_manager.lock().await;
             rm.disable_reconnect();
@@ -1188,21 +1157,11 @@ impl AsyncWsProvider {
     }
 
     /// 检查连接是否健康
-    ///
-    /// # 返回
-    /// `bool`，如果连接健康则返回 `true`，否则返回 `false`。
-    /// 注意：此方法直接返回 `is_connected` 的结果，因为 `AsyncWsProvider` 本身不维护健康状态。
     pub async fn is_healthy(&self) -> bool {
         self.is_connected().await
     }
 
     /// 使用多个 Token 批量绘制多个像素点。
-    ///
-    /// # 参数
-    /// - `operations`: 包含完整绘画操作信息的向量。
-    ///
-    /// # 返回
-    /// `Result`，成功时返回 `()`，失败时包含 `PaintboardError`。
     pub async fn paint_batch_multi_token(
         &self,
         operations: Vec<PaintOperation>,
@@ -1215,7 +1174,6 @@ impl AsyncWsProvider {
             return Ok(());
         }
 
-        // 将所有操作序列化并合并到一个大的二进制包中
         let mut combined_data = Vec::new();
         let mut paint_ids = Vec::new();
 
@@ -1232,16 +1190,13 @@ impl AsyncWsProvider {
             )));
         }
 
-        // 为批次中的每一个操作注册响应追踪器
         for paint_id in &paint_ids {
-            let _ = self.response_tracker.register_request(*paint_id).await;
+            self.response_tracker.register_request(*paint_id).await;
         }
 
-        // 发送合并后的数据包，不等待响应
         match self.send_binary(combined_data).await {
             Ok(_) => Ok(()),
             Err(e) => {
-                // 如果发送失败，需要清理已注册的追踪器
                 for paint_id in &paint_ids {
                     let _ = self.response_tracker.remove_request(*paint_id).await;
                 }
@@ -1253,7 +1208,6 @@ impl AsyncWsProvider {
 
 impl Drop for AsyncWsProvider {
     fn drop(&mut self) {
-        // 当 AsyncWsProvider 被丢弃时，向 Actor 发送关闭信号
         let (response_tx, _) = oneshot::channel();
         let _ = self
             .sender

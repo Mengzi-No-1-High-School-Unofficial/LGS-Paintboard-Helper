@@ -12,6 +12,7 @@ use url::Url; // bring SinkExt into scope so WebSocketStream::send is available
 
 /// WsConnection 封装底层 WebSocket 连接的生命周期与发送接口。
 /// 该类型是轻量的，可由 WsProvider 或其他上层协调者持有 Arc 引用。
+#[allow(dead_code)]
 pub struct WsConnection {
     config: Arc<Config>,
     stream: Arc<TokioMutex<Option<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
@@ -19,6 +20,7 @@ pub struct WsConnection {
 
 impl WsConnection {
     /// 创建一个新的 WsConnection（初始处于未连接状态）
+    #[allow(dead_code)]
     pub fn new(config: Arc<Config>) -> Self {
         Self {
             config,
@@ -27,11 +29,13 @@ impl WsConnection {
     }
 
     /// Expose internal stream Arc for use by background tasks
+    #[allow(dead_code)]
     pub fn stream(&self) -> Arc<TokioMutex<Option<WebSocketStream<MaybeTlsStream<TcpStream>>>>> {
         self.stream.clone()
     }
 
     /// 建立连接并替换当前连接（如果成功）
+    #[allow(dead_code)]
     pub async fn connect(&self) -> Result<(), PaintboardError> {
         let mut url = Url::parse(&self.config.ws_url).map_err(|e| {
             debug!("URL 解析失败: {}", e);
@@ -69,6 +73,7 @@ impl WsConnection {
     }
 
     /// 非阻塞检查当前是否有连接
+    #[allow(dead_code)]
     pub async fn is_connected(&self) -> bool {
         let guard = self.stream.lock().await;
         let is_some = guard.is_some();
@@ -81,6 +86,7 @@ impl WsConnection {
     }
 
     /// 发送二进制消息
+    #[allow(dead_code)]
     pub async fn send_binary(&self, data: Vec<u8>) -> Result<(), Report> {
         debug!("尝试获取连接锁进行发送，数据大小: {} 字节", data.len());
         let mut guard = self.stream.lock().await;
@@ -110,6 +116,7 @@ impl WsConnection {
     }
 
     /// 关闭连接（优雅关闭，如果没有连接则直接返回 Ok）
+    #[allow(dead_code)]
     pub async fn close(&self) -> Result<(), PaintboardError> {
         let mut guard = self.stream.lock().await;
         if let Some(mut ws_stream) = guard.take() {

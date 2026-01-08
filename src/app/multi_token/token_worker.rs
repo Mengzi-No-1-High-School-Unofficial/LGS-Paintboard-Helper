@@ -3,16 +3,16 @@
 //! 该模块实现了Token工作器，负责从像素队列获取任务并使用可用的Token
 //! 发送绘制请求。
 
-use log::{debug, error};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::{debug, error};
 
 use crate::app::multi_token::pixel_queue::PixelQueue;
 use crate::app::multi_token::token_manager::TokenManager;
 use rand;
 use tokio::sync::mpsc;
-use winter_paintboard_sdk::{models::PaintOperation, PaintboardClientTrait};
+use winter_paintboard_sdk::models::PaintOperation;
 
 /// Token 工作器
 ///

@@ -3,11 +3,10 @@
 //! 该模块负责管理本地画板与服务器之间的同步，包括全量同步、增量同步
 //! 和事件监听等功能。
 
-use log::{error, info, warn};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
-use winter_paintboard_sdk::PaintboardClientTrait;
+use tracing::{error, info};
 
 use super::local_board::LocalBoard;
 
@@ -108,9 +107,6 @@ impl BoardSyncManager {
                     }
                     Err(e) => {
                         error!("增量同步失败: {:?}", e);
-                        {
-                            let board = sync_manager.local_board.clone();
-                        }
                     }
                 }
 
@@ -135,6 +131,7 @@ impl BoardSyncManager {
     ///
     /// * `Ok(())` - 成功停止同步管理器
     /// * `Err` - 停止过程中发生错误
+    #[allow(dead_code)]
     pub async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
         {
             let mut should_stop = self.should_stop.write().await;

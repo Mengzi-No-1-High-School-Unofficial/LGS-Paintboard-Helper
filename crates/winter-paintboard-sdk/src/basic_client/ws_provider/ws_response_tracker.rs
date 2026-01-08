@@ -20,13 +20,14 @@ pub struct WsResponseTracker {
 impl WsResponseTracker {
     /// 返回全局追踪器，如不存在则使用 [`WsResponseTracker::new_local`] 创建
     pub fn new() -> Self {
-        let tracker = GLOBAL_WS_RESPONSE_TRACKER.get_or_init(|| WsResponseTracker::new_local());
+        let tracker = GLOBAL_WS_RESPONSE_TRACKER.get_or_init(WsResponseTracker::new_local);
 
         // 成员变量均为 Arc + Mutex，直接 Clone 不会导致引用的丢失
         tracker.clone()
     }
 
     /// 创建新的追踪器（无论是否存在全局追踪器）
+    #[allow(dead_code)]
     pub fn new_local() -> Self {
         Self {
             channels: Arc::new(DashMap::new()),
@@ -60,6 +61,7 @@ impl WsResponseTracker {
     }
 
     /// 获取当前挂起通道数量（仅用于监控 / 测试）
+    #[allow(dead_code)]
     pub async fn pending_count(&self) -> usize {
         let channels = &self.channels;
         channels.len()
@@ -87,7 +89,7 @@ impl WsResponseTracker {
             if let Some((_, (tx, _))) = channels.remove(&paint_id) {
                 // 请求已超时，尝试发送超时错误（如果接收端仍然存在）
                 let _ = tx.send(PaintResult {
-                    drawing_id: paint_id as u32, // 使用原始paint_id作为drawing_id
+                    drawing_id: paint_id, // 使用原始paint_id作为drawing_id
                     status: PaintStatus::Timeout,
                     message: "Request timed out".to_string(),
                 });

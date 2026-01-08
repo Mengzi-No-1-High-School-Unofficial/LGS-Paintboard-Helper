@@ -116,7 +116,7 @@ mod tests {
     #[ignore] // Ignore this test as it requires a real API endpoint
     async fn test_get_token() {
         let config = Arc::new(Config::default());
-        let client = HttpProvider::new(config).unwrap();
+        let _client = HttpProvider::new(config).unwrap();
 
         // This test would require actual credentials to work
         // let token = client.get_token(12345, "test_access_key").await;

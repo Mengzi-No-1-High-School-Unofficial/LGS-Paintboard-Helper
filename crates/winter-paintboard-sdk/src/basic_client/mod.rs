@@ -20,13 +20,3 @@ pub use http_client::HttpProvider;
 pub use paintboard_client_trait::PaintboardClientTrait;
 /// 导出 WebSocket 客户端提供者。
 pub use ws_provider::AsyncWsProvider;
-
-use crate::{
-    config::Config,
-    error::PaintboardError,
-    models::{Board, Pos, Rgb},
-};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-
-use async_trait::async_trait;

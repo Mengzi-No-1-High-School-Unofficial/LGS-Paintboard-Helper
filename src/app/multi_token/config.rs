@@ -75,6 +75,7 @@ impl TokenConfig {
     ///
     /// * `Ok(TokenConfig)` - 构建的配置
     /// * `Err` - 构建过程中发生错误
+    #[allow(dead_code)]
     pub fn from_cli_args(
         access_keys: String,
         uids: String,
@@ -92,7 +93,7 @@ impl TokenConfig {
 
         let tokens = keys
             .into_iter()
-            .zip(uids.into_iter())
+            .zip(uids)
             .map(|(key, uid)| TokenEntry {
                 uid,
                 access_key: Some(key.to_string()),
@@ -132,9 +133,7 @@ impl Eq for PriorityPixel {}
 
 impl PartialOrd for PriorityPixel {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        // 优先级高的排在前面（大顶堆）
-        // other.priority.partial_cmp(&self.priority)
-        self.priority.partial_cmp(&other.priority)
+        Some(self.cmp(other))
     }
 }
 

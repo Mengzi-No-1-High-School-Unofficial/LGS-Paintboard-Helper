@@ -34,8 +34,10 @@ pub struct PixelStatus {
     /// 像素颜色
     pub color: Rgb,
     /// 像素来源（自己绘制或他人绘制）
+    #[allow(dead_code)]
     pub source: PixelSource,
     /// 像素更新时间戳
+    #[allow(dead_code)]
     pub timestamp: std::time::SystemTime,
 }
 
@@ -274,6 +276,7 @@ impl LocalBoard {
     /// # 返回值
     ///
     /// 返回本地画板数据的当前版本号
+    #[allow(dead_code)]
     pub fn version(&self) -> u64 {
         self.version.load(Ordering::Relaxed)
     }
@@ -302,7 +305,7 @@ impl LocalBoard {
 
         recent_paints as f64
     }
-    /// 启动事件监听器，监听来自 SDK 的绘制事件并更新本地画板状态
+    /// 启动事件监听器，监听来自 SDK 的绘制事件并 update 本地画板状态
     pub fn start_event_listener(self: &Arc<Self>) {
         let mut receiver = event::subscribe();
         let self_clone = self.clone();
@@ -311,7 +314,7 @@ impl LocalBoard {
 
             while let Ok(event) = receiver.recv().await {
                 match event {
-                    event::PaintEvent::Success { uid, pos, color } => {
+                    event::PaintEvent::Success { uid: _, pos, color } => {
                         // 1. 更新像素颜色
                         // 注意：我们将自己的成功绘制视为 PixelSource::Own
                         self_clone.update_pixel(pos.x, pos.y, color, PixelSource::Own);
@@ -343,11 +346,8 @@ impl LocalBoard {
                             pos.y
                         );
                     }
-                    event::PaintEvent::Failure { uid, pos } => {
-                        debug!(
-                            "LocalBoard: 绘制失败事件 at ({}, {}) with UID {}",
-                            pos.x, pos.y, uid
-                        );
+                    event::PaintEvent::Failure { uid: _, pos } => {
+                        debug!("LocalBoard: 绘制失败事件 at ({}, {})", pos.x, pos.y);
                     }
                 }
             }

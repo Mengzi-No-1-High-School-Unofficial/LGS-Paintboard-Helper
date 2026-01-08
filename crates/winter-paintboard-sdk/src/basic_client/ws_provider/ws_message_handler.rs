@@ -15,16 +15,19 @@ use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, warn};
 
 /// 消息处理器：管理 WebSocket 消息处理循环和连接状态
+#[allow(dead_code)]
 pub struct WsMessageHandler {
     response_tracker: Arc<WsResponseTracker>,
 }
 
 impl WsMessageHandler {
+    #[allow(dead_code)]
     pub fn new(response_tracker: Arc<WsResponseTracker>) -> Self {
         Self { response_tracker }
     }
 
     /// 处理单条从 WebSocket 接收到的消息
+    #[allow(dead_code)]
     pub async fn handle_message_stream(
         &self,
         message: tokio_tungstenite::tungstenite::protocol::Message,
@@ -77,6 +80,7 @@ impl WsMessageHandler {
         }
     }
 
+    #[allow(dead_code)]
     async fn handle_single_message(
         &self,
         protocol_msg: ProtocolMessage,
@@ -145,13 +149,14 @@ impl WsMessageHandler {
                 );
             }
 
-            other => {
-                // debug!("📨 收到其他协议消息: {:?}", other);
+            _other => {
+                error!("未知的 WebSocket 消息类型: {:?}", _other);
             }
         }
     }
 
     /// 启动消息处理任务，包括消息处理循环和重连逻辑
+    #[allow(dead_code)]
     pub async fn start_message_processing_task(
         &self,
         connection: Arc<WsConnection>,
@@ -163,7 +168,7 @@ impl WsMessageHandler {
         let handler = self.clone();
         let reconnect_manager_clone = reconnect_manager.clone();
         let connection_clone = connection.clone();
-        let config_clone = config.clone();
+        let _config_clone = config.clone(); // Changed `config_clone` to `_config_clone` to suppress dead_code warning
         let ready_notify_clone = ready_notify.clone();
 
         tokio::spawn(async move {

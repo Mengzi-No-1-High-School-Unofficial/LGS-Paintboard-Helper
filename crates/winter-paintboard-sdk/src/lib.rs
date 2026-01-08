@@ -21,7 +21,7 @@ pub async fn get_global_client(
             ))
         })
         .await
-        .map(|client| client.clone())
+        .cloned()
 }
 
 /// 客户端模块，包含与Paintboard API交互的不同客户端实现。

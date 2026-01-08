@@ -213,7 +213,6 @@ impl From<std::io::Error> for PaintboardError {
 }
 
 /// 实现从 `reqwest` 错误到 `PaintboardError` 的转换。
-#[cfg(feature = "reqwest")]
 impl From<reqwest::Error> for PaintboardError {
     /// 将 `reqwest::Error` 转换为 `PaintboardError::Network`。
     fn from(err: reqwest::Error) -> Self {

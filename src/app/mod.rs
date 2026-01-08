@@ -11,9 +11,9 @@ pub mod metrics;
 pub mod multi_token;
 pub mod utils;
 
-use log::{error, info};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing::{error, info};
 use winter_paintboard_sdk::basic_client::HttpProvider;
 use winter_paintboard_sdk::config::Config;
 
@@ -58,8 +58,8 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::MultiToken {
             config,
-            access_keys,
-            uids,
+            access_keys: _,
+            uids: _,
             cd_time,
             ws_url,
             image,
@@ -130,6 +130,7 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 ///
 /// * `Ok(())` - 多 Token 模式正常执行完成
 /// * `Err` - 执行过程中发生错误
+#[allow(clippy::too_many_arguments)]
 pub async fn run_multi_token_mode(
     config_path: PathBuf,
     ws_url: Option<String>,
@@ -138,7 +139,7 @@ pub async fn run_multi_token_mode(
     y: i32,
     width: Option<u32>,
     height: Option<u32>,
-    cd_time: u64,
+    _cd_time: u64,
     comparison_interval: u64,
     enable_export: bool,
     enable_heatmap_export: bool,
@@ -158,7 +159,7 @@ pub async fn run_multi_token_mode(
 
     let _ = multi_token::cli::PENALTY_SCALE
         .set(penalty_scale)
-        .map_err(|e| {
+        .map_err(|_e| {
             let e = color_eyre::Report::msg("无法设置值 PENALTY_SCALE");
             error!("{}", e);
             e
@@ -193,7 +194,7 @@ pub async fn run_multi_token_mode(
 
     // 使用第一个 token 的认证信息
     if let Some(first_token) = token_config.tokens.first() {
-        let token = match (&first_token.token, &first_token.access_key) {
+        let _token = match (&first_token.token, &first_token.access_key) {
             (Some(t), _) => t.clone(),
             (None, Some(ak)) => get_token_with_access_key(first_token.uid, ak).await?,
             _ => {
@@ -285,7 +286,7 @@ async fn run_get_board_mode(
     info!("获取画板状态...");
 
     // Validate authentication arguments
-    let token = match validate_auth_args(&token, &access_key) {
+    let _token = match validate_auth_args(&token, &access_key) {
         Ok(token) => {
             if token.is_empty() {
                 // Need to get token using access key

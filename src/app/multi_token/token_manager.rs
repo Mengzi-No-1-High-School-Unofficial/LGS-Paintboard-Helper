@@ -19,8 +19,10 @@ pub struct TokenInfo {
     /// Token字符串
     pub token: String,
     /// 最后绘制时间
+    #[allow(dead_code)]
     pub last_paint_time: Option<Instant>,
     /// 是否可用
+    #[allow(dead_code)]
     pub is_available: bool,
 }
 
@@ -35,6 +37,7 @@ impl TokenInfo {
     /// # 返回值
     ///
     /// 返回初始化的TokenInfo实例
+    #[allow(dead_code)]
     pub fn new(uid: u32, token: String) -> Self {
         Self {
             uid,
@@ -69,6 +72,7 @@ impl TokenManager {
     /// # 返回值
     ///
     /// 返回初始化的TokenManager实例
+    #[allow(dead_code)]
     pub fn new(tokens: Vec<TokenInfo>, cd_time_ms: u64) -> Self {
         let token_count = tokens.len();
         let token_data = tokens
@@ -188,6 +192,7 @@ impl TokenManager {
     /// # 返回值
     ///
     /// 返回Token的冷却时间
+    #[allow(dead_code)]
     pub fn cd_duration(&self) -> Duration {
         self.cd_duration
     }
@@ -197,6 +202,7 @@ impl TokenManager {
     /// # 返回值
     ///
     /// 返回下一个可用Token的等待时间（如果存在）
+    #[allow(dead_code)]
     pub fn next_available_time(&self) -> Option<Duration> {
         self.next_available_in()
     }
@@ -210,7 +216,8 @@ impl TokenManager {
     /// # 返回值
     ///
     /// 返回指定索引的Token信息引用（如果存在）
-    pub fn get_token(&self, index: usize) -> Option<&TokenInfo> {
+    #[allow(dead_code)]
+    pub fn get_token(&self, _index: usize) -> Option<&TokenInfo> {
         // 这里为了兼容性，返回一个临时的 TokenInfo
         // 实际使用中应该直接使用新接口
         None

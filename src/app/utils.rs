@@ -2,11 +2,10 @@
 //!
 //! 该模块包含各种实用函数，如获取认证Token、验证认证参数等。
 
-use log::info;
+use tracing::info;
 use winter_paintboard_sdk::{config::Config, get_global_client, PaintboardClientTrait};
 
 use color_eyre::Report;
-use winter_paintboard_sdk::Rgb;
 
 /// 通过访问密钥获取认证 Token
 ///
@@ -89,6 +88,7 @@ pub fn validate_auth_args(
 ///
 /// * `Ok(String)` - 解析出的有效Token
 /// * `Err` - 解析过程中发生错误
+#[allow(dead_code)]
 pub async fn resolve_auth_token(
     token: Option<String>,
     uid: u32,
