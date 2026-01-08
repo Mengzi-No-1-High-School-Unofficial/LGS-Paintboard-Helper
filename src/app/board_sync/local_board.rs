@@ -8,6 +8,7 @@ use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
 use std::time::SystemTime;
+use tokio::time::Instant;
 use tracing::{debug, info, trace, warn};
 use winter_paintboard_sdk::models::{Board, Pos, Rgb};
 
@@ -58,6 +59,8 @@ pub struct LocalBoard {
     height: u16,
     /// 版本号，用于跟踪数据更新
     version: AtomicU64,
+    /// 最近变更的像素位置集合（用于增量比对优化）
+    recent_changes: Arc<DashMap<Pos, Instant>>,
 }
 
 impl LocalBoard {
@@ -79,6 +82,7 @@ impl LocalBoard {
             width,
             height,
             version: AtomicU64::new(0),
+            recent_changes: Arc::new(DashMap::new()),
         }
     }
 
@@ -305,6 +309,50 @@ impl LocalBoard {
 
         recent_paints as f64
     }
+
+    /// 标记像素为最近变更（用于增量比对优化）
+    ///
+    /// # 参数
+    ///
+    /// * `pos` - 像素位置
+    pub fn mark_changed(&self, pos: Pos) {
+        self.recent_changes.insert(pos, Instant::now());
+    }
+
+    /// 获取最近变更的像素列表
+    ///
+    /// # 参数
+    ///
+    /// * `max_age` - 最大年龄，只返回在此时间内变更的像素
+    ///
+    /// # 返回值
+    ///
+    /// 返回最近变更的像素位置列表
+    pub fn get_recent_changes(&self, max_age: Duration) -> Vec<Pos> {
+        let now = Instant::now();
+        self.recent_changes
+            .iter()
+            .filter_map(|entry| {
+                if now.duration_since(*entry.value()) < max_age {
+                    Some(*entry.key())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// 清理过期的变更记录
+    ///
+    /// # 参数
+    ///
+    /// * `max_age` - 最大保留时间
+    pub fn cleanup_old_changes(&self, max_age: Duration) {
+        let now = Instant::now();
+        self.recent_changes
+            .retain(|_, instant| now.duration_since(*instant) < max_age);
+    }
+
     /// 启动事件监听器，监听来自 SDK 的绘制事件并 update 本地画板状态
     pub fn start_event_listener(self: &Arc<Self>) {
         let mut receiver = event::subscribe();
@@ -333,7 +381,10 @@ impl LocalBoard {
                         // 注意：PixelUpdate 包含所有像素更新（包括自己和他人）
                         self_clone.update_pixel(pos.x, pos.y, color, PixelSource::Other);
 
-                        // 2. 更新热力图，记录绘制时间戳
+                        // 2. 标记为最近变更（用于增量比对）
+                        self_clone.mark_changed(pos);
+
+                        // 3. 更新热力图，记录绘制时间戳
                         self_clone
                             .heatmap
                             .entry(pos)
