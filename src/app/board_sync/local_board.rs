@@ -8,7 +8,6 @@ use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
 use std::time::SystemTime;
-use tokio::time::Instant;
 use tracing::{debug, info, trace, warn};
 use winter_paintboard_sdk::models::{Board, Pos, Rgb};
 
@@ -39,8 +38,6 @@ pub struct LocalBoard {
     width: u16,
     /// 画板高度
     height: u16,
-    /// 最近变更的像素位置集合（用于增量比对优化）
-    changed_pixels: Arc<DashMap<Pos, Instant>>,
 }
 
 impl LocalBoard {
@@ -61,7 +58,6 @@ impl LocalBoard {
             is_initialized: AtomicBool::new(false),
             width,
             height,
-            changed_pixels: Arc::new(DashMap::new()),
         }
     }
 
@@ -96,15 +92,6 @@ impl LocalBoard {
         } else {
             None
         }
-    }
-
-    /// 获取所有像素数据的引用
-    ///
-    /// # 返回值
-    ///
-    /// 返回指向内部像素数据映射的引用
-    pub fn get_pixels(&self) -> &DashMap<Pos, PixelStatus> {
-        &self.pixels
     }
 
     /// 获取热力图的Arc引用，用于外部读取
@@ -195,12 +182,10 @@ impl LocalBoard {
         // 执行实际的更新操作并标记为最近变更
         for (pos, new_status) in updates {
             self.pixels.insert(pos, new_status);
-            self.mark_pixel_changed(pos); // 标记为最近变更（用于增量比对）
         }
 
         for (pos, new_status) in additions {
             self.pixels.insert(pos, new_status);
-            self.mark_pixel_changed(pos); // 标记为最近变更（用于增量比对）
         }
 
         for pos in removals {
@@ -250,49 +235,6 @@ impl LocalBoard {
         recent_paints as f64
     }
 
-    /// 标记像素为最近变更（用于增量比对优化）
-    ///
-    /// # 参数
-    ///
-    /// * `pos` - 像素位置
-    pub fn mark_pixel_changed(&self, pos: Pos) {
-        self.changed_pixels.insert(pos, Instant::now());
-    }
-
-    /// 获取最近变更的像素列表
-    ///
-    /// # 参数
-    ///
-    /// * `max_age` - 最大年龄，只返回在此时间内变更的像素
-    ///
-    /// # 返回值
-    ///
-    /// 返回最近变更的像素位置列表
-    pub fn get_changed_pixels(&self, max_age: Duration) -> Vec<Pos> {
-        let now = Instant::now();
-        self.changed_pixels
-            .iter()
-            .filter_map(|entry| {
-                if now.duration_since(*entry.value()) < max_age {
-                    Some(*entry.key())
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    /// 清理过期的变更记录
-    ///
-    /// # 参数
-    ///
-    /// * `max_age` - 最大保留时间
-    pub fn cleanup_old_pixel_changes(&self, max_age: Duration) {
-        let now = Instant::now();
-        self.changed_pixels
-            .retain(|_, instant| now.duration_since(*instant) < max_age);
-    }
-
     /// 启动事件监听器，监听来自 SDK 的绘制事件并 update 本地画板状态
     pub fn start_event_listener(self: &Arc<Self>) {
         let mut receiver = event::subscribe();
@@ -318,9 +260,6 @@ impl LocalBoard {
                     event::PaintEvent::PixelUpdate { pos, color } => {
                         // 更新像素颜色
                         self_clone.update_pixel(pos.x, pos.y, color);
-
-                        // 2. 标记为最近变更（用于增量比对）
-                        self_clone.mark_pixel_changed(pos);
 
                         // 3. 更新热力图，记录绘制时间戳
                         self_clone
