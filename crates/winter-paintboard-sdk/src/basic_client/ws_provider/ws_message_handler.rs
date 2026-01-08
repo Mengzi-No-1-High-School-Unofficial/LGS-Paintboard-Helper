@@ -134,7 +134,7 @@ impl WsMessageHandler {
 
             ProtocolMessage::PaintEvent { pos, color } => {
                 // 广播他人绘制事件到事件总线
-                event::post(event::PaintEvent::OtherPaint { pos, color });
+                event::post(event::PaintEvent::PixelUpdate { pos, color });
                 debug!(
                     "🎨 收到他人绘制事件并广播: pos={:?}, color={:?}",
                     pos, color

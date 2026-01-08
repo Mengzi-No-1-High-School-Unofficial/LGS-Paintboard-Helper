@@ -573,8 +573,11 @@ impl WsActor {
                 }
             }
 
-            ProtocolMessage::PaintEvent { .. } => {
-                // 不再需要处理这个事件
+            ProtocolMessage::PaintEvent { pos, color } => {
+                use crate::event;
+                // 发布像素更新事件（不区分来源，因为 PixelSource 字段未被使用）
+                event::post(event::PaintEvent::PixelUpdate { pos, color });
+                trace!("收到像素更新: ({}, {})", pos.x, pos.y);
             }
 
             ProtocolMessage::Unknown { opcode, data } => {

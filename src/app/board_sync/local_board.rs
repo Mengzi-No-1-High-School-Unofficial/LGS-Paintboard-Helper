@@ -328,9 +328,9 @@ impl LocalBoard {
 
                         trace!("LocalBoard: 通过事件更新像素 at ({}, {})", pos.x, pos.y);
                     }
-                    event::PaintEvent::OtherPaint { pos, color } => {
+                    event::PaintEvent::PixelUpdate { pos, color } => {
                         // 1. 更新像素颜色
-                        // 注意：我们将他人绘制视为 PixelSource::Other
+                        // 注意：PixelUpdate 包含所有像素更新（包括自己和他人）
                         self_clone.update_pixel(pos.x, pos.y, color, PixelSource::Other);
 
                         // 2. 更新热力图，记录绘制时间戳
@@ -340,11 +340,7 @@ impl LocalBoard {
                             .or_default()
                             .push(SystemTime::now());
 
-                        trace!(
-                            "LocalBoard: 通过他人绘制事件更新像素 at ({}, {})",
-                            pos.x,
-                            pos.y
-                        );
+                        trace!("LocalBoard: 通过像素更新事件更新 at ({}, {})", pos.x, pos.y);
                     }
                     event::PaintEvent::Failure { uid: _, pos } => {
                         debug!("LocalBoard: 绘制失败事件 at ({}, {})", pos.x, pos.y);
