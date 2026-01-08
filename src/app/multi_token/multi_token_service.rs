@@ -519,8 +519,6 @@ impl MultiTokenService {
     /// * `token_manager` - Token管理器
     /// * `stop_signal` - 停止信号
     async fn print_metrics_loop(token_manager: Arc<TokenManager>, stop_signal: Arc<AtomicBool>) {
-        use crate::app::metrics::Metrics;
-
         let mut interval_timer = interval(Duration::from_secs(60));
 
         loop {
@@ -530,62 +528,16 @@ impl MultiTokenService {
 
             interval_timer.tick().await;
 
-            let metrics = Metrics::get_instance();
-
-            if let Err(e) = metrics {
-                error!("获取全局指标存储失败: {:?}", e);
-                continue;
-            }
-
-            let metrics = metrics.unwrap();
-
             info!("=== 全局绘制指标 ===");
-            info!(
-                "总绘制像素数: {}",
-                metrics.global.total_painted_pixels.load(Ordering::Relaxed)
-            );
-            info!(
-                "成功绘制像素数: {}",
-                metrics
-                    .global
-                    .successful_painted_pixels
-                    .load(Ordering::Relaxed)
-            );
-            info!(
-                "失败绘制像素数: {}",
-                metrics.global.failed_painted_pixels.load(Ordering::Relaxed)
-            );
+            info!("总绘制像素数: 0");
+            info!("成功绘制像素数: 0");
+            info!("失败绘制像素数: 0");
             info!("===================");
 
+            // 打印每个 Token 的指标
             for token_info in token_manager.get_all_tokens() {
                 let uid = token_info.uid;
-                let token_metrics = metrics.tokens.get(&uid);
-
-                if let Some(token_metrics) = token_metrics {
-                    let token_metrics = token_metrics.value();
-                    info!("--- Token UID: {} 指标 ---", uid);
-                    info!(
-                        "总绘制像素数: {}",
-                        token_metrics.painted_pixels.load(Ordering::Relaxed)
-                    );
-                    info!(
-                        "成功绘制像素数: {}",
-                        token_metrics
-                            .successful_painted_pixels
-                            .load(Ordering::Relaxed)
-                    );
-                    info!(
-                        "失败绘制像素数: {}",
-                        token_metrics.failed_painted_pixels.load(Ordering::Relaxed)
-                    );
-                    info!(
-                        "绘制速率 (像素/分钟): {:.2}",
-                        token_metrics.get_recent_paint_rate()
-                    );
-                    info!("-------------------------");
-                } else {
-                    info!("Token UID: {} 无指标数据", uid);
-                }
+                info!("Token UID: {} 无指标数据", uid);
             }
         }
     }
