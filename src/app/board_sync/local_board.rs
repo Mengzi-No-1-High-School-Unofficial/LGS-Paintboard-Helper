@@ -3,7 +3,7 @@
 //! 该模块实现了本地画板数据的存储和同步功能，包括像素数据、热力图、
 //! 数据完整性验证等功能。
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
@@ -17,29 +17,11 @@ use winter_paintboard_sdk::event;
 /// 热力图过期时间
 const HEATMAP_EXPIRE_DURATION: Duration = Duration::from_secs(10 * 60); // 10min
 
-/// 像素来源枚举，用于区分像素是来自自己的绘制还是其他用户的绘制
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PixelSource {
-    /// 来自自己的绘制
-    Own = 0,
-    /// 来自其他用户的绘制
-    Other = 1,
-}
-
 /// 像素状态结构
-///
-/// 包含像素的颜色、来源和时间戳信息
 #[derive(Debug, Clone)]
 pub struct PixelStatus {
     /// 像素颜色
     pub color: Rgb,
-    /// 像素来源（自己绘制或他人绘制）
-    #[allow(dead_code)]
-    pub source: PixelSource,
-    /// 像素更新时间戳
-    #[allow(dead_code)]
-    pub timestamp: std::time::SystemTime,
 }
 
 /// 本地画板数据结构，使用 DashMap 存储
@@ -57,10 +39,8 @@ pub struct LocalBoard {
     width: u16,
     /// 画板高度
     height: u16,
-    /// 版本号，用于跟踪数据更新
-    version: AtomicU64,
     /// 最近变更的像素位置集合（用于增量比对优化）
-    recent_changes: Arc<DashMap<Pos, Instant>>,
+    changed_pixels: Arc<DashMap<Pos, Instant>>,
 }
 
 impl LocalBoard {
@@ -81,34 +61,21 @@ impl LocalBoard {
             is_initialized: AtomicBool::new(false),
             width,
             height,
-            version: AtomicU64::new(0),
-            recent_changes: Arc::new(DashMap::new()),
+            changed_pixels: Arc::new(DashMap::new()),
         }
     }
 
-    /// 更新像素颜色，保留来源信息和时间戳
+    /// 更新像素颜色
     ///
     /// # 参数
     ///
     /// * `x` - 像素X坐标
     /// * `y` - 像素Y坐标
     /// * `color` - 像素颜色
-    /// * `source` - 像素来源（自己绘制或他人绘制）
-    pub fn update_pixel(&self, x: u16, y: u16, color: Rgb, source: PixelSource) {
+    pub fn update_pixel(&self, x: u16, y: u16, color: Rgb) {
         if x < self.width && y < self.height {
-            let current_time = std::time::SystemTime::now();
             let pos = Pos::new(x, y).expect("Invalid coordinates for Pos creation");
-
-            self.pixels.insert(
-                pos,
-                PixelStatus {
-                    color,
-                    source,
-                    timestamp: current_time,
-                },
-            );
-
-            self.version.fetch_add(1, Ordering::Relaxed);
+            self.pixels.insert(pos, PixelStatus { color });
         }
     }
 
@@ -180,8 +147,6 @@ impl LocalBoard {
                             pos,
                             PixelStatus {
                                 color: server_color,
-                                source: PixelSource::Other, // 来自服务器的数据视为他人
-                                timestamp: std::time::SystemTime::now(),
                             },
                         ));
                     }
@@ -215,8 +180,6 @@ impl LocalBoard {
                             pos,
                             PixelStatus {
                                 color: server_color,
-                                source: PixelSource::Other, // 来自服务器的数据视为他人
-                                timestamp: std::time::SystemTime::now(),
                             },
                         ));
                     }
@@ -227,17 +190,17 @@ impl LocalBoard {
         let updates_len = updates.len();
         let additions_len = additions.len();
         let removals_len = removals.len();
-        let has_changes = updates_len > 0 || additions_len > 0 || removals_len > 0;
+        let _has_changes = updates_len > 0 || additions_len > 0 || removals_len > 0;
 
         // 执行实际的更新操作并标记为最近变更
         for (pos, new_status) in updates {
             self.pixels.insert(pos, new_status);
-            self.mark_changed(pos); // 标记为最近变更（用于增量比对）
+            self.mark_pixel_changed(pos); // 标记为最近变更（用于增量比对）
         }
 
         for (pos, new_status) in additions {
             self.pixels.insert(pos, new_status);
-            self.mark_changed(pos); // 标记为最近变更（用于增量比对）
+            self.mark_pixel_changed(pos); // 标记为最近变更（用于增量比对）
         }
 
         for pos in removals {
@@ -250,12 +213,6 @@ impl LocalBoard {
             additions_len,
             removals_len
         );
-
-        // 只有当实际发生了更改时，才更新版本号
-        if has_changes {
-            self.version.fetch_add(1, Ordering::Relaxed);
-        }
-
         self.is_initialized.store(true, Ordering::Relaxed);
     }
 
@@ -277,25 +234,6 @@ impl LocalBoard {
         (self.width, self.height)
     }
 
-    /// 获取当前版本号
-    ///
-    /// # 返回值
-    ///
-    /// 返回本地画板数据的当前版本号
-    #[allow(dead_code)]
-    pub fn version(&self) -> u64 {
-        self.version.load(Ordering::Relaxed)
-    }
-
-    /// 计算并返回指定像素位置在近期（10分钟内）的绘制次数
-    ///
-    /// # 参数
-    ///
-    /// * `pos` - 像素位置
-    ///
-    /// # 返回值
-    ///
-    /// 返回近期绘制次数 (`f64`)
     pub fn calculate_penalty(&self, pos: &Pos) -> f64 {
         // 计算10分钟内的绘制次数
         let recent_paints = self.heatmap.get(pos).map_or(0, |entry| {
@@ -317,8 +255,8 @@ impl LocalBoard {
     /// # 参数
     ///
     /// * `pos` - 像素位置
-    pub fn mark_changed(&self, pos: Pos) {
-        self.recent_changes.insert(pos, Instant::now());
+    pub fn mark_pixel_changed(&self, pos: Pos) {
+        self.changed_pixels.insert(pos, Instant::now());
     }
 
     /// 获取最近变更的像素列表
@@ -330,9 +268,9 @@ impl LocalBoard {
     /// # 返回值
     ///
     /// 返回最近变更的像素位置列表
-    pub fn get_recent_changes(&self, max_age: Duration) -> Vec<Pos> {
+    pub fn get_changed_pixels(&self, max_age: Duration) -> Vec<Pos> {
         let now = Instant::now();
-        self.recent_changes
+        self.changed_pixels
             .iter()
             .filter_map(|entry| {
                 if now.duration_since(*entry.value()) < max_age {
@@ -349,9 +287,9 @@ impl LocalBoard {
     /// # 参数
     ///
     /// * `max_age` - 最大保留时间
-    pub fn cleanup_old_changes(&self, max_age: Duration) {
+    pub fn cleanup_old_pixel_changes(&self, max_age: Duration) {
         let now = Instant::now();
-        self.recent_changes
+        self.changed_pixels
             .retain(|_, instant| now.duration_since(*instant) < max_age);
     }
 
@@ -365,9 +303,8 @@ impl LocalBoard {
             while let Ok(event) = receiver.recv().await {
                 match event {
                     event::PaintEvent::Success { uid: _, pos, color } => {
-                        // 1. 更新像素颜色
-                        // 注意：我们将自己的成功绘制视为 PixelSource::Own
-                        self_clone.update_pixel(pos.x, pos.y, color, PixelSource::Own);
+                        // 更新像素颜色
+                        self_clone.update_pixel(pos.x, pos.y, color);
 
                         // 3. 更新热力图，记录绘制时间戳
                         self_clone
@@ -379,12 +316,11 @@ impl LocalBoard {
                         trace!("LocalBoard: 通过事件更新像素 at ({}, {})", pos.x, pos.y);
                     }
                     event::PaintEvent::PixelUpdate { pos, color } => {
-                        // 1. 更新像素颜色
-                        // 注意：PixelUpdate 包含所有像素更新（包括自己和他人）
-                        self_clone.update_pixel(pos.x, pos.y, color, PixelSource::Other);
+                        // 更新像素颜色
+                        self_clone.update_pixel(pos.x, pos.y, color);
 
                         // 2. 标记为最近变更（用于增量比对）
-                        self_clone.mark_changed(pos);
+                        self_clone.mark_pixel_changed(pos);
 
                         // 3. 更新热力图，记录绘制时间戳
                         self_clone
@@ -456,7 +392,7 @@ mod tests {
         let board = LocalBoard::new(100, 100);
         let test_color = Rgb::new(255, 0, 0);
 
-        board.update_pixel(10, 20, test_color, PixelSource::Own);
+        board.update_pixel(10, 20, test_color);
         assert_eq!(board.get_pixel(10, 20), Some(test_color));
         assert_eq!(board.get_pixel(11, 20), None); // No pixel at (11, 20)
     }
@@ -473,7 +409,7 @@ mod tests {
 
         let local = LocalBoard::new(1000, 600);
         // local has different color at (0,0)
-        local.update_pixel(0, 0, Rgb::new(0, 0, 0), PixelSource::Own);
+        local.update_pixel(0, 0, Rgb::new(0, 0, 0));
 
         local.update_from_board(&server_board);
 

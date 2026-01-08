@@ -332,7 +332,7 @@ impl MultiTokenService {
             }
 
             // 1. 获取最近变更的像素列表（30秒内）
-            let recent_changes = local_board.get_recent_changes(Duration::from_secs(30));
+            let recent_changes = local_board.get_changed_pixels(Duration::from_secs(30));
 
             if recent_changes.is_empty() {
                 trace!("无最近变更，跳过比对");
@@ -426,7 +426,7 @@ impl MultiTokenService {
 
             // 6. 定期清理过期的变更记录（每10次比对一次）
             if comparison_count % 10 == 0 {
-                local_board.cleanup_old_changes(Duration::from_secs(30));
+                local_board.cleanup_old_pixel_changes(Duration::from_secs(30));
                 debug!("已清理过期变更记录");
             }
         }
