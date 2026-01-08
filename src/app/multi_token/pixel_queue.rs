@@ -7,6 +7,7 @@ use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use std::collections::BinaryHeap;
 use std::sync::Arc;
+use tokio::sync::Notify;
 
 use crate::app::multi_token::config::PriorityPixel;
 
@@ -17,6 +18,8 @@ use crate::app::multi_token::config::PriorityPixel;
 pub struct PixelQueue {
     /// 二叉堆存储的像素队列
     queue: Arc<Mutex<BinaryHeap<PriorityPixel>>>,
+    /// 队列非空通知器（用于事件驱动）
+    not_empty: Arc<Notify>,
 }
 
 impl PixelQueue {
@@ -28,6 +31,7 @@ impl PixelQueue {
     pub fn new() -> Self {
         Self {
             queue: Arc::new(Mutex::new(BinaryHeap::new())),
+            not_empty: Arc::new(Notify::new()),
         }
     }
 
@@ -105,6 +109,11 @@ impl PixelQueue {
         // 如果新像素数量很多（例如超过当前队列一半），直接替换可能更高效
         if new_pixels.len() > queue.len() / 2 {
             *queue = BinaryHeap::from(new_pixels);
+            let should_notify = !queue.is_empty();
+            drop(queue);
+            if should_notify {
+                self.not_empty.notify_one();
+            }
             return;
         }
 
@@ -117,7 +126,23 @@ impl PixelQueue {
             pixel_map.insert(pixel.pos, pixel);
         }
 
-        // 原子性地重建优先队列
+        //  原子性地重建优先队列
         *queue = pixel_map.into_values().collect();
+
+        // 如果队列非空，唤醒一个等待的 worker
+        let should_notify = !queue.is_empty();
+        drop(queue); // 释放锁再唤醒
+
+        if should_notify {
+            self.not_empty.notify_one();
+        }
+    }
+
+    /// 等待队列非空（异步阻塞）
+    ///
+    /// 当队列为空时，worker 可以调用此方法进入等待状态，
+    /// 直到有新像素被添加到队列
+    pub async fn wait_for_items(&self) {
+        self.not_empty.notified().await;
     }
 }

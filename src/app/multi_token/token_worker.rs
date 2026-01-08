@@ -99,7 +99,16 @@ impl TokenWorker {
                 None => {
                     // 没有任务，立即释放 Token，避免占用
                     token_lease.mark_failed();
-                    tokio::time::sleep(Duration::from_millis(100)).await; // 队列为空，等待更长时间
+
+                    // 等待新像素或超时（事件驱动）
+                    tokio::select! {
+                        _ = self.pixel_queue.wait_for_items() => {
+                            // 被唤醒，重新尝试获取像素
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                            // 超时保护，防止信号丢失
+                        }
+                    }
                     continue;
                 }
             };
