@@ -7,7 +7,6 @@ pub mod board_sync;
 pub mod cli;
 pub mod export;
 pub mod image_processing;
-pub mod metrics;
 pub mod multi_token;
 pub mod utils;
 
