@@ -7,7 +7,7 @@ use color_eyre::Report;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
@@ -315,7 +315,6 @@ impl MultiTokenService {
         stop_signal: Arc<AtomicBool>,
     ) {
         let mut interval_timer = interval(interval_duration);
-        let mut comparison_count = 0u64;
 
         loop {
             if stop_signal.load(Ordering::Acquire) {
@@ -323,25 +322,14 @@ impl MultiTokenService {
             }
 
             interval_timer.tick().await;
-            comparison_count += 1;
 
-            debug!("开始增量比对绘版与目标图片...");
+            debug!("开始全量比对绘版与目标图片...");
             if !local_board.is_initialized() {
                 warn!("本地绘版未初始化，跳过比对");
                 continue;
             }
 
-            // 1. 获取最近变更的像素列表（30秒内）
-            let recent_changes = local_board.get_changed_pixels(Duration::from_secs(30));
-
-            if recent_changes.is_empty() {
-                trace!("无最近变更，跳过比对");
-                continue;
-            }
-
-            debug!("检查 {} 个最近变更的像素", recent_changes.len());
-
-            // 2. 计算总绘制频率 (∑R)
+            // 计算总绘制频率 (∑R)
             let total_recent_paints = local_board
                 .get_heatmap()
                 .iter()
@@ -362,33 +350,24 @@ impl MultiTokenService {
             let penalty_divisor = total_recent_paints.max(MIN_TOTAL_PAINTS);
             let penalty_scale = get_penalty_scale() as f64;
 
-            // 3. 计算每个变更像素的优先级
+            // 遍历目标图像的所有像素进行比对
             let mut differences = Vec::new();
-            let local_pixels = local_board.get_pixels();
 
-            for pos in recent_changes {
-                // 检查该位置是否在目标图像范围内，并找到对应的目标颜色
-                let target_color = target_image
-                    .full_scale_operations
-                    .iter()
-                    .find(|(p, _)| p == &pos)
-                    .map(|(_, c)| c);
+            for (pos, target_color) in &target_image.full_scale_operations {
+                let x = pos.x as i32;
+                let y = pos.y as i32;
 
-                if let Some(target_color) = target_color {
-                    let x = pos.x as i32;
-                    let y = pos.y as i32;
+                let relative_x = x - start_x;
+                let relative_y = y - start_y;
 
-                    let relative_x = x - start_x;
-                    let relative_y = y - start_y;
-
-                    if relative_x >= 0
-                        && relative_y >= 0
-                        && relative_x < target_image.img_width as i32
-                        && relative_y < target_image.img_height as i32
-                    {
-                        let base_priority = if let Some(current_pixel) = local_pixels.get(&pos) {
-                            if current_pixel.color != *target_color {
-                                // 基础优先级，后续可替换为 Canny 边缘强度等
+                if relative_x >= 0
+                    && relative_y >= 0
+                    && relative_x < target_image.img_width as i32
+                    && relative_y < target_image.img_height as i32
+                {
+                    let base_priority =
+                        if let Some(current_pixel) = local_board.get_pixel(pos.x, pos.y) {
+                            if current_pixel != *target_color {
                                 ((pos.x + pos.y) % 8) as f64
                             } else {
                                 continue; // 颜色一致，跳过
@@ -397,37 +376,25 @@ impl MultiTokenService {
                             255.0 // 缺少像素，最高优先级
                         };
 
-                        // 4. 计算归一化惩罚值并应用
-                        let recent_paints = local_board.calculate_penalty(&pos);
-                        let penalty = (recent_paints / penalty_divisor) * penalty_scale;
-                        let final_priority = base_priority - penalty;
+                    // 计算归一化惩罚值并应用
+                    let recent_paints = local_board.calculate_penalty(pos);
+                    let penalty = (recent_paints / penalty_divisor) * penalty_scale;
+                    let final_priority = base_priority - penalty;
 
-                        trace!(
-                            "像素 ({}, {}): 基础优先级: {:.2}, 近期绘制: {}, 惩罚: {:.2}, 最终优先级: {:.2}",
-                            pos.x, pos.y, base_priority, recent_paints, penalty, final_priority
-                        );
-
-                        differences.push(PriorityPixel {
-                            pos,
-                            color: *target_color,
-                            priority: final_priority,
-                        });
-                    }
+                    differences.push(PriorityPixel {
+                        pos: *pos,
+                        color: *target_color,
+                        priority: final_priority,
+                    });
                 }
             }
 
-            // 5. 更新队列（增量合并）
+            // 更新队列
             if !differences.is_empty() {
-                info!("检测到 {} 个像素差异，更新队列", differences.len());
+                info!("全量比对检测到 {} 个像素差异，更新队列", differences.len());
                 pixel_queue.merge_updates(differences);
             } else {
-                trace!("最近变更中无需修复的像素");
-            }
-
-            // 6. 定期清理过期的变更记录（每10次比对一次）
-            if comparison_count % 10 == 0 {
-                local_board.cleanup_old_pixel_changes(Duration::from_secs(30));
-                debug!("已清理过期变更记录");
+                info!("全量比对完成：目标图像已完成");
             }
         }
     }
