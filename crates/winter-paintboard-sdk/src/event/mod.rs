@@ -12,8 +12,8 @@ use tokio::sync::broadcast::{self, Receiver, Sender};
 pub enum PaintEvent {
     /// 绘制成功事件。
     Success { uid: u32, pos: Pos, color: Rgb },
-    /// 其他用户绘制事件。
-    OtherPaint { pos: Pos, color: Rgb },
+    /// 像素更新事件（来自 WebSocket 0xFA 消息）。
+    PixelUpdate { pos: Pos, color: Rgb },
     /// 绘制失败事件。
     Failure { uid: u32, pos: Pos },
 }
