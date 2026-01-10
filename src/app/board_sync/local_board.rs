@@ -242,36 +242,52 @@ impl LocalBoard {
         tokio::spawn(async move {
             info!("LocalBoard: 事件监听器已启动");
 
-            while let Ok(event) = receiver.recv().await {
-                match event {
-                    event::PaintEvent::Success { uid: _, pos, color } => {
-                        // 更新像素颜色
-                        self_clone.update_pixel(pos.x, pos.y, color);
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => {
+                        match event {
+                            event::PaintEvent::Success { uid: _, pos, color } => {
+                                // 更新像素颜色
+                                self_clone.update_pixel(pos.x, pos.y, color);
 
-                        // 3. 更新热力图，记录绘制时间戳
-                        self_clone
-                            .heatmap
-                            .entry(pos)
-                            .or_default()
-                            .push(SystemTime::now());
+                                // 3. 更新热力图，记录绘制时间戳
+                                self_clone
+                                    .heatmap
+                                    .entry(pos)
+                                    .or_default()
+                                    .push(SystemTime::now());
 
-                        trace!("LocalBoard: 通过事件更新像素 at ({}, {})", pos.x, pos.y);
+                                trace!("LocalBoard: 通过事件更新像素 at ({}, {})", pos.x, pos.y);
+                            }
+                            event::PaintEvent::PixelUpdate { pos, color } => {
+                                // 更新像素颜色
+                                self_clone.update_pixel(pos.x, pos.y, color);
+
+                                // 3. 更新热力图，记录绘制时间戳
+                                self_clone
+                                    .heatmap
+                                    .entry(pos)
+                                    .or_default()
+                                    .push(SystemTime::now());
+
+                                trace!(
+                                    "LocalBoard: 通过像素更新事件更新 at ({}, {})",
+                                    pos.x,
+                                    pos.y
+                                );
+                            }
+                            event::PaintEvent::Failure { uid: _, pos } => {
+                                debug!("LocalBoard: 绘制失败事件 at ({}, {})", pos.x, pos.y);
+                            }
+                        }
                     }
-                    event::PaintEvent::PixelUpdate { pos, color } => {
-                        // 更新像素颜色
-                        self_clone.update_pixel(pos.x, pos.y, color);
-
-                        // 3. 更新热力图，记录绘制时间戳
-                        self_clone
-                            .heatmap
-                            .entry(pos)
-                            .or_default()
-                            .push(SystemTime::now());
-
-                        trace!("LocalBoard: 通过像素更新事件更新 at ({}, {})", pos.x, pos.y);
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!("LocalBoard: 事件接收器滞后，跳过 {} 条消息", skipped);
+                        continue;
                     }
-                    event::PaintEvent::Failure { uid: _, pos } => {
-                        debug!("LocalBoard: 绘制失败事件 at ({}, {})", pos.x, pos.y);
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        warn!("LocalBoard: 事件广播通道已关闭，监听器退出");
+                        break;
                     }
                 }
             }
