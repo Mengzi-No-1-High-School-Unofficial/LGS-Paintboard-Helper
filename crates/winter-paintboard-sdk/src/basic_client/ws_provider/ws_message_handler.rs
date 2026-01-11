@@ -113,6 +113,9 @@ impl WsMessageHandler {
                 let paint_status = PaintStatus::from(status);
                 debug!("🎨 绘图状态: {:?}", paint_status);
 
+                // 记录错误统计
+                crate::error_stats::record_paint_result(&paint_status);
+
                 let paint_result = PaintResult {
                     drawing_id,
                     status: paint_status,

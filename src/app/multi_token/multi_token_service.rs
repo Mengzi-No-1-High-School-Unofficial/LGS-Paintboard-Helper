@@ -204,7 +204,7 @@ impl MultiTokenService {
         }));
 
         // 为每个 Token 创建 Worker
-        for i in 0..self.token_manager.len() {
+        for i in 0..(self.token_manager.len() * 4) {
             let token_manager = self.token_manager.clone();
             let pixel_queue = self.pixel_queue.clone();
             let batch_sender = batch_sender.clone();
@@ -392,6 +392,10 @@ impl MultiTokenService {
             // 更新队列
             if !differences.is_empty() {
                 info!("全量比对检测到 {} 个像素差异，更新队列", differences.len());
+
+                // 打印绘制错误统计
+                winter_paintboard_sdk::error_stats::print_stats();
+
                 pixel_queue.merge_updates(differences);
             } else {
                 info!("全量比对完成：目标图像已完成");
