@@ -85,9 +85,10 @@ impl TokenWorker {
                 None => {
                     // 如果没有可用的 Token，则等待一小段时间或直到下一个 Token 可用
                     if let Some(wait_duration) = self.token_manager.next_available_in() {
-                        tokio::time::sleep(wait_duration.min(Duration::from_millis(50))).await;
+                        // 优化：将等待时间从50ms降至5ms，大幅提高token利用率
+                        tokio::time::sleep(wait_duration.min(Duration::from_millis(5))).await;
                     } else {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        tokio::time::sleep(Duration::from_millis(5)).await;
                     }
                     continue;
                 }
@@ -105,7 +106,8 @@ impl TokenWorker {
                         _ = self.pixel_queue.wait_for_items() => {
                             // 被唤醒，重新尝试获取像素
                         }
-                        _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                        _ = tokio::time::sleep(Duration::from_millis(20)) => {
+                            // 优化：将超时从100ms降至20ms，减少延迟
                             // 超时保护，防止信号丢失
                         }
                     }

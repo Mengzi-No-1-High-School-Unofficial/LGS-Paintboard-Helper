@@ -30,6 +30,8 @@ pub mod basic_client;
 pub mod config;
 /// 错误处理模块，定义了SDK特有的错误类型。
 pub mod error;
+/// 错误统计模块，用于追踪绘制结果错误。
+pub mod error_stats;
 /// 事件模块，用于处理实时事件。
 pub mod event;
 /// 数据模型模块，定义了API请求和响应的数据结构。

@@ -23,7 +23,8 @@ use super::{
 /// 最大包大小 (32 KB)
 const MAX_PACKET_SIZE: usize = 32 * 1024; // 32 KB
 const PENDING_PACKETS_SIZE_LIMIT: usize = 32;
-const PENDING_PACKETS_DURATION_MILLS: u64 = 200;
+// 优化：将延迟从200ms降至20ms，大幅减少反击延迟
+const PENDING_PACKETS_DURATION_MILLS: u64 = 20;
 
 /// 连接请求类型
 enum ConnectionRequest {
@@ -75,6 +76,8 @@ struct WsActor {
     receiver: mpsc::UnboundedReceiver<WsActorMessage>,
     /// 用于发送消息的通道
     sender: mpsc::UnboundedSender<WsActorMessage>,
+    /// 专用的WebSocket发送channel（用于解耦发送操作）
+    ws_send_tx: Option<mpsc::UnboundedSender<(Vec<u8>, oneshot::Sender<Result<(), Report>>)>>,
     /// WebSocket 发送端
     ws_sender: Option<
         futures::stream::SplitSink<
@@ -137,6 +140,7 @@ impl WsActor {
             pending_packets,
             receiver,
             sender: sender.clone(),
+            ws_send_tx: None, // 初始化为None，在连接时创建
             ws_sender: None,
             ws_receiver_stream: None,
             message_task_handle: None,
@@ -279,8 +283,31 @@ impl WsActor {
     async fn handle_send_request(&mut self, req: SendRequest) {
         match req {
             SendRequest::SendBinary { data, response_tx } => {
-                let result = self.send_binary_internal(data).await;
-                let _ = response_tx.send(result);
+                // 真正的异步优化：使用专用channel，Actor立即返回，不阻塞
+                if let Some(ref send_tx) = self.ws_send_tx {
+                    let is_connected = *self.connected.lock().await;
+                    let is_reconnecting = self.reconnecting.load(Ordering::Relaxed);
+
+                    if !is_connected || is_reconnecting {
+                        let _ = response_tx
+                            .send(Err(Report::new(PaintboardError::ConnectionClosed)
+                                .wrap_err("无法发送消息，连接未建立或正在重连")));
+                        return;
+                    }
+
+                    // 立即发送到专用channel，不等待实际发送完成
+                    // Actor可以立即处理下一个消息
+                    if send_tx.send((data, response_tx)).is_err() {
+                        error!("发送channel已关闭");
+                        let _ = self.sender.send(WsActorMessage::Connection(
+                            ConnectionRequest::MarkDisconnected,
+                        ));
+                    }
+                } else {
+                    *self.connected.lock().await = false;
+                    let _ = response_tx.send(Err(Report::new(PaintboardError::ConnectionClosed)
+                        .wrap_err("WebSocket 发送端不存在")));
+                }
             }
             SendRequest::SendPong {
                 payload,
@@ -323,8 +350,44 @@ impl WsActor {
         match tokio_tungstenite::connect_async(url).await {
             Ok((ws_stream, _)) => {
                 debug!("WebSocket 连接建立成功");
-                let (sender, receiver) = ws_stream.split();
-                self.ws_sender = Some(sender);
+                let (mut sender, receiver) = ws_stream.split();
+
+                // 创建专用的发送channel
+                let (send_tx, mut send_rx) =
+                    mpsc::unbounded_channel::<(Vec<u8>, oneshot::Sender<Result<(), Report>>)>();
+
+                // 启动独立的发送任务，避免阻塞Actor
+                let last_send_time = self.last_send_time.clone();
+                let actor_sender = self.sender.clone();
+                tokio::spawn(async move {
+                    while let Some((data, response_tx)) = send_rx.recv().await {
+                        let send_result = sender
+                            .send(tokio_tungstenite::tungstenite::protocol::Message::Binary(
+                                data,
+                            ))
+                            .await;
+
+                        match send_result {
+                            Ok(_) => {
+                                *last_send_time.lock().await = Instant::now();
+                                let _ = response_tx.send(Ok(()));
+                            }
+                            Err(e) => {
+                                error!("发送二进制消息时检测到连接错误: {}", e);
+                                let _ = actor_sender.send(WsActorMessage::Connection(
+                                    ConnectionRequest::MarkDisconnected,
+                                ));
+                                let _ =
+                                    response_tx.send(Err(Report::new(e).wrap_err("发送消息失败")));
+                                break; // 发送失败，退出循环
+                            }
+                        }
+                    }
+                    debug!("独立发送任务已退出");
+                });
+
+                self.ws_send_tx = Some(send_tx);
+                self.ws_sender = None; // 不再需要直接持有sender
                 self.ws_receiver_stream = Some(receiver);
                 *self.connected.lock().await = true;
                 self.reconnecting.store(false, Ordering::Relaxed);
@@ -338,43 +401,6 @@ impl WsActor {
                 error!("WebSocket 连接失败: {}", e);
                 Err(PaintboardError::websocket(e.to_string()))
             }
-        }
-    }
-
-    async fn send_binary_internal(&mut self, data: Vec<u8>) -> Result<(), Report> {
-        debug!("尝试发送二进制消息，数据大小: {} 字节", data.len());
-
-        if !*self.connected.lock().await || self.reconnecting.load(Ordering::Relaxed) {
-            return Err(Report::new(PaintboardError::ConnectionClosed)
-                .wrap_err("无法发送消息，连接未建立或正在重连"));
-        }
-
-        if let Some(ref mut ws_sender) = self.ws_sender {
-            debug!("开始发送二进制消息");
-            match ws_sender
-                .send(tokio_tungstenite::tungstenite::protocol::Message::Binary(
-                    data,
-                ))
-                .await
-            {
-                Ok(_) => {
-                    debug!("二进制消息发送成功");
-                    // 更新上次发送时间
-                    *self.last_send_time.lock().await = Instant::now();
-                    Ok(())
-                }
-                Err(e) => {
-                    error!("发送二进制消息时检测到连接错误: {}", e);
-                    // 发送 MarkDisconnected 消息来触发重连
-                    let _ = self.sender.send(WsActorMessage::Connection(
-                        ConnectionRequest::MarkDisconnected,
-                    ));
-                    Err(Report::new(e).wrap_err("发送消息失败"))
-                }
-            }
-        } else {
-            *self.connected.lock().await = false;
-            Err(Report::new(PaintboardError::ConnectionClosed).wrap_err("WebSocket 发送端不存在"))
         }
     }
 
@@ -554,6 +580,9 @@ impl WsActor {
                 use crate::models::{PaintResult, PaintStatus};
                 let paint_status = PaintStatus::from(status);
                 debug!("绘图状态: {:?}", paint_status);
+
+                // 记录错误统计
+                crate::error_stats::record_paint_result(&paint_status);
 
                 let paint_result = PaintResult {
                     drawing_id,
@@ -1193,19 +1222,14 @@ impl AsyncWsProvider {
             )));
         }
 
-        for paint_id in &paint_ids {
-            self.response_tracker.register_request(*paint_id).await;
-        }
-
-        match self.send_binary(combined_data).await {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                for paint_id in &paint_ids {
-                    let _ = self.response_tracker.remove_request(*paint_id).await;
-                }
-                Err(PaintboardError::Internal(e.to_string()))
-            }
-        }
+        // 批量绘制使用"发送即忘"(fire-and-forget)模式，不追踪响应以减少开销
+        // 这样可以：
+        // 1. 减少内存分配和HashMap操作
+        // 2. 消除异步等待点
+        // 3. 提高并发性能
+        self.send_binary(combined_data)
+            .await
+            .map_err(|e| PaintboardError::Internal(e.to_string()))
     }
 }
 

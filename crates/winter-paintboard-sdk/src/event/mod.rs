@@ -26,7 +26,9 @@ pub struct EventBus {
 
 /// 全局唯一的事件总线实例。
 static EVENT_BUS: Lazy<EventBus> = Lazy::new(|| {
-    let (sender, _) = broadcast::channel(1024); // Channel 容量为 1024
+    // 优化：将容量从1024增加到100000，支持高速绘制（800+ events/s）
+    // 避免RecvError::Lagged导致本地状态不准确和重复绘制
+    let (sender, _) = broadcast::channel(100000);
     EventBus { sender }
 });
 
