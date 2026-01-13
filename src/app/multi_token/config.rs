@@ -139,9 +139,10 @@ impl PartialOrd for PriorityPixel {
 
 impl Ord for PriorityPixel {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other
-            .priority
-            .partial_cmp(&self.priority)
+        // 正向排序: priority 值越大,优先级越高
+        // BinaryHeap 是最大堆,所以 self.priority > other.priority 时返回 Greater
+        self.priority
+            .partial_cmp(&other.priority)
             .unwrap_or(std::cmp::Ordering::Equal)
     }
 }

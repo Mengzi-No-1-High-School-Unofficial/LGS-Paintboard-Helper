@@ -207,7 +207,7 @@ pub async fn run_multi_token_mode(
     sync_manager
         .start_sync_loop(
             sync_client,
-            tokio::time::Duration::from_millis(std::cmp::max(comparison_interval, 7500)),
+            tokio::time::Duration::from_millis(std::cmp::max(comparison_interval, 2500)),
         )
         .await?;
 
