@@ -379,7 +379,8 @@ impl MultiTokenService {
                     // 计算归一化惩罚值并应用
                     let recent_paints = local_board.calculate_penalty(pos);
                     let penalty = (recent_paints / penalty_divisor) * penalty_scale;
-                    let final_priority = base_priority - penalty;
+                    // 确保优先级不会变成负数,避免异常排序行为
+                    let final_priority = (base_priority - penalty).max(0.0);
 
                     differences.push(PriorityPixel {
                         pos: *pos,

@@ -75,11 +75,17 @@ impl BoardSyncManager {
         tokio::spawn(async move {
             let mut interval_timer = interval(sync_interval);
 
+            // 设置错过的 tick 策略：跳过错过的 tick，避免雪崩效应
+            interval_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            info!("全量同步后台任务已启动，间隔: {:?}", sync_interval);
+
             loop {
                 // 检查是否需要停止
                 {
                     let stop = sync_manager.should_stop.read().await;
                     if *stop {
+                        info!("检测到停止信号，同步任务退出");
                         break;
                     }
                     drop(stop); // 释放锁
@@ -88,35 +94,77 @@ impl BoardSyncManager {
                 // 等待下一个同步时间点
                 interval_timer.tick().await;
 
-                // 开始同步前，标记同步进行中
-                {
-                    let mut sync_flag = sync_manager.sync_in_progress.write().await;
-                    *sync_flag = true;
-                    info!("开始增量同步绘版数据...");
-                }
+                // 使用 AssertUnwindSafe 包装逻辑以捕获 Panic
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| async {
+                    // 开始同步前，标记同步进行中
+                    {
+                        let mut sync_flag = sync_manager.sync_in_progress.write().await;
+                        *sync_flag = true;
+                    }
 
-                // 尝试获取服务器数据
-                match client.get_board().await {
-                    Ok(board_data) => {
-                        let board = sync_manager.local_board.clone();
+                    tracing::debug!("开始执行 HTTP 全量同步...");
 
-                        // 执行差异同步（update_from_board 方法会进行实际的差异比较和更新）
-                        board.update_from_board(&board_data);
+                    // 尝试获取服务器数据
+                    let sync_result = match client.get_board().await {
+                        Ok(board_data) => {
+                            let board = sync_manager.local_board.clone();
 
-                        info!("增量同步完成，处理了服务器数据更新");
+                            // 执行差异同步
+                            board.update_from_board(&board_data);
+
+                            info!("HTTP 全量同步完成");
+                            Ok(())
+                        }
+                        Err(e) => {
+                            error!("HTTP 全量同步失败: {:?}", e);
+                            Err(e)
+                        }
+                    };
+
+                    // 同步完成后，标记同步结束
+                    {
+                        let mut sync_flag = sync_manager.sync_in_progress.write().await;
+                        *sync_flag = false;
+                    }
+
+                    sync_result
+                }));
+
+                // 处理 catch_unwind 的结果
+                match result {
+                    Ok(future) => {
+                        // 正常执行，等待 future 完成
+                        match future.await {
+                            Ok(_) => {}
+                            Err(e) => {
+                                // 这里是业务逻辑错误，已经在内部打印过了，不需要重复打印
+                                // 仅仅防止 loop 退出
+                                tracing::debug!("同步周期结束（含错误）: {:?}", e);
+                            }
+                        }
                     }
                     Err(e) => {
-                        error!("增量同步失败: {:?}", e);
+                        // 捕获到 Panic！
+                        let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
+                            format!("Panic: {}", s)
+                        } else if let Some(s) = e.downcast_ref::<String>() {
+                            format!("Panic: {}", s)
+                        } else {
+                            "Unknown panic type".to_string()
+                        };
+
+                        error!(
+                            "❌ 同步任务发生严重恐慌 (Panic)，已捕获并尝试恢复: {}",
+                            panic_msg
+                        );
+
+                        // 尝试重置锁状态，防止死锁（虽然 unwind safe 不能保证完全安全，但在此时尽力而为）
+                        // 注意：如果是在获取写锁期间 panic，锁可能会中毒 (poisoned)，但在 tokio RwLock 中不会中毒，只是可能维持锁定状态
+                        // 我们尝试强制重置标志
+                        let mut sync_flag = sync_manager.sync_in_progress.write().await;
+                        *sync_flag = false;
                     }
                 }
-
-                // 同步完成后，标记同步结束
-                {
-                    let mut sync_flag = sync_manager.sync_in_progress.write().await;
-                    *sync_flag = false;
-                }
-
-                // 同步期间不再缓存事件
             }
         });
 
