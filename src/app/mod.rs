@@ -11,8 +11,8 @@ pub mod ipc;
 pub mod multi_token;
 pub mod utils;
 
-use std::path::PathBuf;
 use std::sync::Arc;
+use std::{path::PathBuf, time::Duration};
 use tracing::{error, info};
 use winter_paintboard_sdk::basic_client::HttpProvider;
 use winter_paintboard_sdk::config::Config;
@@ -531,6 +531,7 @@ async fn run_worker_mode(
         x,
         y,
         local_board.clone(),
+        Duration::from_millis(comparison_interval),
         batch_size,
         client,
     )

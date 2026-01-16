@@ -191,6 +191,7 @@ impl MultiTokenService {
         start_x: i32,
         start_y: i32,
         local_board: Arc<LocalBoard>,
+        comparison_interval: Duration,
         batch_size: usize,
         shared_client: Arc<AsyncClient>,
     ) -> Result<Self, Report> {
@@ -223,7 +224,7 @@ impl MultiTokenService {
             start_x,
             start_y,
             stop_signal,
-            comparison_interval: Duration::from_millis(5000),
+            comparison_interval,
             token_manager,
             shared_client,
             batch_size,

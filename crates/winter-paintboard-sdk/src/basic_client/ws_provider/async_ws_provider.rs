@@ -606,7 +606,7 @@ impl WsActor {
                 use crate::event;
                 // 发布像素更新事件（不区分来源，因为 PixelSource 字段未被使用）
                 event::post(event::PaintEvent::PixelUpdate { pos, color });
-                trace!("收到像素更新: ({}, {})", pos.x, pos.y);
+                debug!("收到像素更新: ({}, {}) -> {:?}", pos.x, pos.y, color);
             }
 
             ProtocolMessage::Unknown { opcode, data } => {

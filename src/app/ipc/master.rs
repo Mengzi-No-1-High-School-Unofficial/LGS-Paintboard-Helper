@@ -109,6 +109,7 @@ impl SyncMaster {
 
         // 启动事件监听和广播
         let master = self.clone_inner();
+        debug!("SyncMaster: Spawning event broadcast loop");
         tokio::spawn(async move {
             loop {
                 if let Err(e) = master.run_event_broadcast().await {
@@ -250,11 +251,16 @@ impl SyncMasterInner {
     /// 运行事件广播循环
     async fn run_event_broadcast(&self) -> Result<()> {
         let mut receiver = event::subscribe();
+        debug!("SyncMaster: Event broadcast loop started and subscribed to global event bus");
 
         loop {
             match receiver.recv().await {
                 Ok(event) => match event {
                     PaintEvent::PixelUpdate { pos, color } => {
+                        debug!(
+                            "Master: 收到实时像素更新 ({}, {}) -> {:?}",
+                            pos.x, pos.y, color
+                        );
                         let msg = MasterMessage::PixelUpdate {
                             x: pos.x,
                             y: pos.y,
