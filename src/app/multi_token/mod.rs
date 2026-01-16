@@ -6,3 +6,5 @@ pub mod pixel_queue;
 pub mod token_lease;
 pub mod token_manager;
 pub mod token_worker;
+
+pub use multi_token_service::MultiTokenService;
