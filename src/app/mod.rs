@@ -156,10 +156,10 @@ pub async fn run_multi_token_mode(
 
     info!("启动多 Token 绘制模式...");
 
-    let _ = multi_token::cli::PENALTY_SCALE
+    let _ = multi_token::cli::PENALTY_SENSITIVITY
         .set(penalty_scale)
         .map_err(|_e| {
-            let e = color_eyre::Report::msg("无法设置值 PENALTY_SCALE");
+            let e = color_eyre::Report::msg("无法设置值 PENALTY_SENSITIVITY");
             error!("{}", e);
             e
         });
