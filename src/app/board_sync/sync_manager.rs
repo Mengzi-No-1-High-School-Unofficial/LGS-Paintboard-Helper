@@ -3,6 +3,7 @@
 //! 该模块负责管理本地画板与服务器之间的同步，包括全量同步、增量同步
 //! 和事件监听等功能。
 
+use futures::FutureExt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
@@ -94,9 +95,12 @@ impl BoardSyncManager {
         match tokio::time::timeout(Duration::from_secs(30), client.get_board()).await {
             Ok(Ok(board_data)) => {
                 // 使用 catch_unwind 保护同步代码,防止 panic
-                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    self.local_board.update_from_board(&board_data)
-                })) {
+                match std::panic::AssertUnwindSafe(async {
+                    self.local_board.update_from_board(&board_data).await
+                })
+                .catch_unwind()
+                .await
+                {
                     Ok(changes) => {
                         info!("✅ 初始全量同步完成,画板已初始化");
                         // 初始同步通常量很大，不一定广播，但如果需要也可以广播
@@ -160,9 +164,15 @@ impl BoardSyncManager {
             match tokio::time::timeout(Duration::from_secs(30), client.get_board()).await {
                 Ok(Ok(board_data)) => {
                     // 使用 catch_unwind 保护同步代码,防止 panic
-                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        sync_manager.local_board.update_from_board(&board_data)
-                    })) {
+                    match std::panic::AssertUnwindSafe(async {
+                        sync_manager
+                            .local_board
+                            .update_from_board(&board_data)
+                            .await
+                    })
+                    .catch_unwind()
+                    .await
+                    {
                         Ok(changes) => {
                             info!("HTTP 全量同步完成");
                             if let Some(cb) = &on_diff {

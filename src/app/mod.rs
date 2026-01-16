@@ -229,6 +229,17 @@ pub async fn run_multi_token_mode(
         canny_high_thresh,
     )?;
 
+    // 设置感兴趣区域（优化同步性能）
+    let interest_pixels: Vec<winter_paintboard_sdk::models::Pos> = processed_image_data
+        .full_scale_operations
+        .iter()
+        .map(|(pos, _)| *pos)
+        .collect();
+    sync_manager
+        .local_board()
+        .set_interest_pixels(interest_pixels)
+        .await;
+
     // 使用第一个 token 的认证信息
     if let Some(first_token) = token_config.tokens.first() {
         let _token = match (&first_token.token, &first_token.access_key) {
@@ -504,6 +515,14 @@ async fn run_worker_mode(
         canny_low_thresh,
         canny_high_thresh,
     )?;
+
+    // 设置感兴趣区域（优化同步性能）
+    let interest_pixels: Vec<winter_paintboard_sdk::models::Pos> = processed_image
+        .full_scale_operations
+        .iter()
+        .map(|(pos, _)| *pos)
+        .collect();
+    local_board.set_interest_pixels(interest_pixels).await;
 
     // 创建并启动绘制服务
     let mut service = multi_token::MultiTokenService::with_board(

@@ -8,6 +8,7 @@ use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
 use std::time::SystemTime;
+use tokio::sync::RwLock;
 use tracing::{debug, info, trace, warn};
 use winter_paintboard_sdk::models::{Board, Pos, Rgb};
 
@@ -38,6 +39,8 @@ pub struct LocalBoard {
     width: u16,
     /// 画板高度
     height: u16,
+    /// 感兴趣的像素点列表（优化遍历）
+    interest_pixels: Arc<RwLock<Option<Vec<Pos>>>>,
 }
 
 impl LocalBoard {
@@ -58,7 +61,16 @@ impl LocalBoard {
             is_initialized: AtomicBool::new(false),
             width,
             height,
+            interest_pixels: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// 设置感兴趣的像素点列表
+    ///
+    /// 设置后，全量更新操作（如 update_from_board）将仅遍历这些像素点
+    pub async fn set_interest_pixels(&self, pixels: Vec<Pos>) {
+        let mut interest = self.interest_pixels.write().await;
+        *interest = Some(pixels);
     }
 
     /// 更新像素颜色
@@ -121,9 +133,51 @@ impl LocalBoard {
     /// # 返回值
     ///
     /// 返回发生变更的像素列表 (x, y, color)，用于广播通知
-    pub fn update_from_board(&self, board: &Board) -> Vec<(u32, u32, Rgb)> {
+    pub async fn update_from_board(&self, board: &Board) -> Vec<(u32, u32, Rgb)> {
         // 全量更新时，服务器数据是绝对权威
         // 但不直接清空，而是对比并更新差异
+
+        let interest_pixels = self.interest_pixels.read().await;
+
+        if let Some(ref interest) = *interest_pixels {
+            // 如果设定了感兴趣区域，仅遍历该区域
+            let mut changed_pixels = Vec::new();
+
+            for pos in interest {
+                let x = pos.x;
+                let y = pos.y;
+
+                if x < board.width && y < board.height {
+                    if let Ok(server_pixel) = board.get_pixel(x, y) {
+                        let server_color = Rgb::new(server_pixel.r, server_pixel.g, server_pixel.b);
+
+                        // 对比本地颜色
+                        let is_diff = self
+                            .pixels
+                            .get(pos)
+                            .map(|entry| entry.value().color != server_color)
+                            .unwrap_or(true);
+
+                        if is_diff {
+                            self.pixels.insert(
+                                *pos,
+                                PixelStatus {
+                                    color: server_color,
+                                },
+                            );
+                            changed_pixels.push((x as u32, y as u32, server_color));
+                        }
+                    }
+                }
+            }
+
+            info!(
+                "全量同步完成（感兴趣区域模式），更新：{} 个像素",
+                changed_pixels.len()
+            );
+            self.is_initialized.store(true, Ordering::Relaxed);
+            return changed_pixels;
+        }
 
         // 收集所有需要更新或删除的像素
         let mut updates = Vec::new();
@@ -277,7 +331,7 @@ impl LocalBoard {
     /// # 返回值
     ///
     /// RGB 格式的字节数组,长度为 width * height * 3
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub async fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![0u8; (self.width as usize) * (self.height as usize) * 3];
 
         for entry in self.pixels.iter() {
@@ -300,7 +354,7 @@ impl LocalBoard {
     /// # 参数
     ///
     /// * `bytes` - RGB 格式的字节数组
-    pub fn update_from_bytes(&self, bytes: &[u8]) {
+    pub async fn update_from_bytes(&self, bytes: &[u8]) {
         let expected_len = (self.width as usize) * (self.height as usize) * 3;
         if bytes.len() != expected_len {
             warn!(
@@ -308,6 +362,29 @@ impl LocalBoard {
                 expected_len,
                 bytes.len()
             );
+            return;
+        }
+
+        let interest_pixels = self.interest_pixels.read().await;
+
+        if let Some(ref interest) = *interest_pixels {
+            for pos in interest {
+                let idx = ((pos.y as usize) * (self.width as usize) + (pos.x as usize)) * 3;
+                if idx + 2 < bytes.len() {
+                    let r = bytes[idx];
+                    let g = bytes[idx + 1];
+                    let b = bytes[idx + 2];
+
+                    self.pixels.insert(
+                        *pos,
+                        PixelStatus {
+                            color: Rgb::new(r, g, b),
+                        },
+                    );
+                }
+            }
+            self.is_initialized.store(true, Ordering::SeqCst);
+            info!("画板从字节数据更新完成（感兴趣区域模式）");
             return;
         }
 
@@ -433,15 +510,15 @@ mod tests {
     use super::*;
     use winter_paintboard_sdk::models::{Board, Pixel};
 
-    #[test]
-    fn test_local_board_creation() {
+    #[tokio::test]
+    async fn test_local_board_creation() {
         let board = LocalBoard::new(1000, 600);
         assert_eq!(board.dimensions(), (1000, 600));
         assert!(!board.is_initialized());
     }
 
-    #[test]
-    fn test_local_board_pixel_operations() {
+    #[tokio::test]
+    async fn test_local_board_pixel_operations() {
         let board = LocalBoard::new(100, 100);
         let test_color = Rgb::new(255, 0, 0);
 
@@ -450,8 +527,8 @@ mod tests {
         assert_eq!(board.get_pixel(11, 20), None); // No pixel at (11, 20)
     }
 
-    #[test]
-    fn test_update_from_board_applies_server_data() {
+    #[tokio::test]
+    async fn test_update_from_board_applies_server_data() {
         // create a server board and modify a few pixels, then feed to LocalBoard
         let mut server_board = Board::new();
         // set pixel (0,0) to white and (1,0) to red
@@ -464,11 +541,37 @@ mod tests {
         // local has different color at (0,0)
         local.update_pixel(0, 0, Rgb::new(0, 0, 0));
 
-        local.update_from_board(&server_board);
+        local.update_from_board(&server_board).await;
 
         // After updating, local should match server at those positions
         assert_eq!(local.get_pixel(0, 0), Some(Rgb::new(255, 255, 255)));
         assert_eq!(local.get_pixel(1, 0), Some(Rgb::new(255, 0, 0)));
         assert!(local.is_initialized());
+    }
+
+    #[tokio::test]
+    async fn test_update_from_board_with_interest_pixels() {
+        let local = LocalBoard::new(1000, 600);
+        let pos1 = Pos::new(10, 10).unwrap();
+        // 仅对 (10, 10) 感兴趣
+        local.set_interest_pixels(vec![pos1]).await;
+
+        let mut server_board = Board::new();
+        server_board
+            .set_pixel(10, 10, Pixel::new(255, 255, 255))
+            .unwrap();
+        server_board
+            .set_pixel(20, 20, Pixel::new(255, 0, 0))
+            .unwrap();
+
+        let changes = local.update_from_board(&server_board).await;
+
+        // 只有 (10, 10) 应该被更新
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].0, 10);
+        assert_eq!(local.get_pixel(10, 10), Some(Rgb::new(255, 255, 255)));
+
+        // (20, 20) 即使在服务器上有数据，也应该被忽略
+        assert_eq!(local.get_pixel(20, 20), None);
     }
 }
