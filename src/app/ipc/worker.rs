@@ -179,7 +179,7 @@ impl SyncWorker {
         match msg {
             MasterMessage::FullBoard { pixels, .. } => {
                 // 直接从字节更新画板
-                local_board.update_from_bytes(&pixels);
+                local_board.update_from_bytes(&pixels).await;
                 info!("Worker received full board from Master");
 
                 // 发送注册消息

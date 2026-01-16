@@ -186,7 +186,7 @@ impl SyncMasterInner {
         let writer = Arc::new(RwLock::new(writer));
 
         // 1. 发送完整画板
-        let board_data = self.local_board.to_bytes();
+        let board_data = self.local_board.to_bytes().await;
         let msg = MasterMessage::FullBoard {
             width: 1000,
             height: 600,
