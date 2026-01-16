@@ -73,6 +73,12 @@ impl LocalBoard {
         *interest = Some(pixels);
     }
 
+    /// 获取感兴趣的像素点列表的副本
+    pub async fn get_interest_pixels(&self) -> Option<Vec<Pos>> {
+        let interest = self.interest_pixels.read().await;
+        interest.clone()
+    }
+
     /// 更新像素颜色
     ///
     /// # 参数
