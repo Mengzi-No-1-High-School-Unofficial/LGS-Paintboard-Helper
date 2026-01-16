@@ -7,6 +7,7 @@ pub mod board_sync;
 pub mod cli;
 pub mod export;
 pub mod image_processing;
+pub mod ipc;
 pub mod multi_token;
 pub mod utils;
 
@@ -91,6 +92,43 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 enable_heatmap_export,
                 export_dir,
                 export_interval,
+                canny_low_thresh,
+                canny_high_thresh,
+                penalty_scale,
+                batch_size,
+            )
+            .await
+        }
+        Commands::Master {
+            ws_url,
+            sync_interval,
+            socket_path,
+        } => run_master_mode(ws_url, sync_interval, socket_path).await,
+        Commands::Worker {
+            master_socket,
+            ws_url,
+            config,
+            image,
+            x,
+            y,
+            width,
+            height,
+            comparison_interval,
+            canny_low_thresh,
+            canny_high_thresh,
+            penalty_scale,
+            batch_size,
+        } => {
+            run_worker_mode(
+                master_socket,
+                ws_url,
+                config,
+                image,
+                x,
+                y,
+                width,
+                height,
+                comparison_interval,
                 canny_low_thresh,
                 canny_high_thresh,
                 penalty_scale,
@@ -208,6 +246,7 @@ pub async fn run_multi_token_mode(
         .start_sync_loop(
             sync_client,
             tokio::time::Duration::from_millis(std::cmp::max(comparison_interval, 2500)),
+            Option::<std::sync::Arc<fn(Vec<(u32, u32, winter_paintboard_sdk::Rgb)>)>>::None,
         )
         .await?;
 
@@ -365,6 +404,132 @@ License: AGPL-3.0
     "#,
         env!("CARGO_PKG_VERSION")
     );
+
+    Ok(())
+}
+
+/// 运行 Master 模式
+///
+/// Master 负责同步画板数据并通过 Unix Socket 分发给 Worker
+async fn run_master_mode(
+    ws_url: Option<String>,
+    sync_interval: u64,
+    socket_path: std::path::PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    info!("启动 Master 模式...");
+
+    // 配置
+    let mut config = Config::default();
+    if let Some(url) = ws_url {
+        config.ws_url = url;
+    }
+
+    // 创建客户端
+    let client = winter_paintboard_sdk::get_global_client(config).await?;
+
+    // 创建并启动 Master
+    let master = ipc::SyncMaster::new(
+        socket_path,
+        tokio::time::Duration::from_millis(sync_interval),
+    );
+
+    master
+        .start(client)
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })
+}
+
+/// 运行 Worker 模式
+///
+/// Worker 从 Master 接收画板数据并执行绘制任务
+#[allow(clippy::too_many_arguments)]
+async fn run_worker_mode(
+    master_socket: std::path::PathBuf,
+    ws_url: Option<String>,
+    config_path: std::path::PathBuf,
+    image: std::path::PathBuf,
+    x: i32,
+    y: i32,
+    width: Option<u32>,
+    height: Option<u32>,
+    comparison_interval: u64,
+    canny_low_thresh: f32,
+    canny_high_thresh: f32,
+    penalty_scale: f32,
+    batch_size: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    info!("启动 Worker 模式...");
+
+    // 设置惩罚参数
+    let _ = multi_token::cli::PENALTY_SENSITIVITY
+        .set(penalty_scale)
+        .map_err(|_e| {
+            let e = color_eyre::Report::msg("无法设置值 PENALTY_SENSITIVITY");
+            error!("{}", e);
+            e
+        });
+
+    // 连接到 Master
+    let worker = ipc::SyncWorker::new(master_socket);
+    let local_board = worker.connect().await?;
+
+    // 配置 WebSocket (writeonly 模式)
+    let mut config = Config::default();
+    if let Some(url) = ws_url {
+        // 添加 writeonly 参数
+        if url.contains('?') {
+            config.ws_url = format!("{}&writeonly=1", url);
+        } else {
+            config.ws_url = format!("{}?writeonly=1", url);
+        }
+    } else {
+        // 默认 URL 添加 writeonly
+        config.ws_url = format!("{}?writeonly=1", config.ws_url);
+    }
+
+    // 创建客户端 (writeonly 模式)
+    let client = winter_paintboard_sdk::get_global_client(config).await?;
+
+    // 加载 Token 配置
+    let token_config: multi_token::config::TokenConfig =
+        serde_json::from_reader(std::fs::File::open(&config_path)?)?;
+
+    // 处理图像
+    let processed_image = image_processing::process_image_at_all_scales(
+        &image,
+        width,
+        height,
+        x,
+        y,
+        canny_low_thresh,
+        canny_high_thresh,
+    )?;
+
+    // 创建并启动绘制服务
+    let mut service = multi_token::MultiTokenService::with_board(
+        token_config,
+        processed_image.clone(),
+        x,
+        y,
+        local_board.clone(),
+        batch_size,
+        client,
+    )
+    .await?;
+
+    service.start().await?;
+
+    // 运行比对和绘制循环
+    multi_token::MultiTokenService::run_comparison_loop(
+        service.pixel_queue(),
+        local_board,
+        processed_image,
+        x,
+        y,
+        tokio::time::Duration::from_millis(comparison_interval),
+        service.stop_signal(),
+    )
+    .await;
 
     Ok(())
 }

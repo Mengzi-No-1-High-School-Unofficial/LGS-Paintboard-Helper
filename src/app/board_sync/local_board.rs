@@ -110,7 +110,18 @@ impl LocalBoard {
     /// # 参数
     ///
     /// * `board` - 服务器画板数据
-    pub fn update_from_board(&self, board: &Board) {
+    /// 从Board对象更新本地数据 - 这是权威数据
+    ///
+    /// 使用服务器的Board数据全量更新本地画板数据，服务器数据是绝对权威
+    ///
+    /// # 参数
+    ///
+    /// * `board` - 服务器画板数据
+    ///
+    /// # 返回值
+    ///
+    /// 返回发生变更的像素列表 (x, y, color)，用于广播通知
+    pub fn update_from_board(&self, board: &Board) -> Vec<(u32, u32, Rgb)> {
         // 全量更新时，服务器数据是绝对权威
         // 但不直接清空，而是对比并更新差异
 
@@ -179,12 +190,17 @@ impl LocalBoard {
         let removals_len = removals.len();
         let _has_changes = updates_len > 0 || additions_len > 0 || removals_len > 0;
 
+        // 准备返回的变更列表
+        let mut changed_pixels = Vec::with_capacity(updates_len + additions_len);
+
         // 执行实际的更新操作并标记为最近变更
         for (pos, new_status) in updates {
+            changed_pixels.push((pos.x as u32, pos.y as u32, new_status.color));
             self.pixels.insert(pos, new_status);
         }
 
         for (pos, new_status) in additions {
+            changed_pixels.push((pos.x as u32, pos.y as u32, new_status.color));
             self.pixels.insert(pos, new_status);
         }
 
@@ -199,6 +215,8 @@ impl LocalBoard {
             removals_len
         );
         self.is_initialized.store(true, Ordering::Relaxed);
+
+        changed_pixels
     }
 
     /// 检查本地画板是否已初始化
@@ -252,6 +270,67 @@ impl LocalBoard {
                 })
                 .sum()
         })
+    }
+
+    /// 将画板数据序列化为字节数组
+    ///
+    /// # 返回值
+    ///
+    /// RGB 格式的字节数组,长度为 width * height * 3
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = vec![0u8; (self.width as usize) * (self.height as usize) * 3];
+
+        for entry in self.pixels.iter() {
+            let pos = entry.key();
+            let color = &entry.value().color;
+
+            let idx = ((pos.y as usize) * (self.width as usize) + (pos.x as usize)) * 3;
+            if idx + 2 < bytes.len() {
+                bytes[idx] = color.r;
+                bytes[idx + 1] = color.g;
+                bytes[idx + 2] = color.b;
+            }
+        }
+
+        bytes
+    }
+
+    /// 从字节数组更新画板数据
+    ///
+    /// # 参数
+    ///
+    /// * `bytes` - RGB 格式的字节数组
+    pub fn update_from_bytes(&self, bytes: &[u8]) {
+        let expected_len = (self.width as usize) * (self.height as usize) * 3;
+        if bytes.len() != expected_len {
+            warn!(
+                "Bytes length mismatch: expected {}, got {}",
+                expected_len,
+                bytes.len()
+            );
+            return;
+        }
+
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let idx = ((y as usize) * (self.width as usize) + (x as usize)) * 3;
+                let r = bytes[idx];
+                let g = bytes[idx + 1];
+                let b = bytes[idx + 2];
+
+                if let Ok(pos) = Pos::new(x, y) {
+                    self.pixels.insert(
+                        pos,
+                        PixelStatus {
+                            color: Rgb::new(r, g, b),
+                        },
+                    );
+                }
+            }
+        }
+
+        self.is_initialized.store(true, Ordering::SeqCst);
+        info!("画板从字节数据更新完成");
     }
 
     /// 启动事件监听器，监听来自 SDK 的绘制事件并 update 本地画板状态

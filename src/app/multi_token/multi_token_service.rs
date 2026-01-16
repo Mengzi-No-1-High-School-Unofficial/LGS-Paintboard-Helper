@@ -174,6 +174,72 @@ impl MultiTokenService {
         })
     }
 
+    /// 使用已有的 LocalBoard 创建服务 (用于 Worker 模式)
+    ///
+    /// # 参数
+    ///
+    /// * `token_config` - Token配置
+    /// * `target_image` - 目标图像数据
+    /// * `start_x` - 起始X坐标
+    /// * `start_y` - 起始Y坐标
+    /// * `local_board` - 已有的 LocalBoard 实例
+    /// * `batch_size` - 批处理大小
+    /// * `shared_client` - 共享的客户端
+    pub async fn with_board(
+        token_config: TokenConfig,
+        target_image: ProcessedImageData,
+        start_x: i32,
+        start_y: i32,
+        local_board: Arc<LocalBoard>,
+        batch_size: usize,
+        shared_client: Arc<AsyncClient>,
+    ) -> Result<Self, Report> {
+        let stop_signal = Arc::new(AtomicBool::new(false));
+
+        // 解析所有 Token（将 access_key 转换为 token）
+        let tokens = Self::fetch_tokens(&token_config).await?;
+
+        // 创建 TokenManager 用于解析 Token
+        let token_manager = Arc::new(TokenManager::new(tokens, token_config.cd_time_ms));
+
+        // 启动 Metrics 打印任务 (每 5 秒打印一次)
+        let metrics_handle = {
+            let token_manager_clone = token_manager.clone();
+            let stop_signal_for_metrics = stop_signal.clone();
+
+            tokio::spawn(async move {
+                Self::print_metrics_loop(token_manager_clone, stop_signal_for_metrics).await;
+            })
+        };
+
+        Ok(Self {
+            workers: Vec::new(),
+            batcher_handle: None,
+            metrics_handle: Some(metrics_handle),
+            comparison_handle: None,
+            pixel_queue: Arc::new(PixelQueue::new()),
+            local_board,
+            target_image,
+            start_x,
+            start_y,
+            stop_signal,
+            comparison_interval: Duration::from_millis(5000),
+            token_manager,
+            shared_client,
+            batch_size,
+        })
+    }
+
+    /// 获取像素队列
+    pub fn pixel_queue(&self) -> Arc<PixelQueue> {
+        self.pixel_queue.clone()
+    }
+
+    /// 获取停止信号
+    pub fn stop_signal(&self) -> Arc<AtomicBool> {
+        self.stop_signal.clone()
+    }
+
     /// 启动服务
     ///
     /// 启动所有组件，包括绘制执行器、Token工作线程和比对循环
@@ -305,7 +371,7 @@ impl MultiTokenService {
     /// * `interval_duration` - 比对间隔时间
     /// * `stop_signal` - 停止信号
     #[allow(clippy::too_many_arguments)]
-    async fn run_comparison_loop(
+    pub async fn run_comparison_loop(
         pixel_queue: Arc<PixelQueue>,
         local_board: Arc<LocalBoard>,
         target_image: ProcessedImageData,
