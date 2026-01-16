@@ -66,11 +66,35 @@ impl BoardSyncManager {
         client: Arc<dyn winter_paintboard_sdk::PaintboardClientTrait + Send + Sync>,
         sync_interval: Duration,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let sync_manager = self.clone();
-        let client = client; // 确保client是可变的
+        // 1. 立即执行一次初始同步,确保画板在使用前已初始化
+        info!("执行初始全量同步...");
+        match tokio::time::timeout(Duration::from_secs(30), client.get_board()).await {
+            Ok(Ok(board_data)) => {
+                // 使用 catch_unwind 保护同步代码,防止 panic
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.local_board.update_from_board(&board_data);
+                })) {
+                    Ok(_) => {
+                        info!("✅ 初始全量同步完成,画板已初始化");
+                    }
+                    Err(e) => {
+                        error!("❌ update_from_board panic: {:?}", e);
+                        error!("初始同步失败,但将继续启动后台同步循环");
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                error!("❌ 初始全量同步失败: {:?}", e);
+                error!("将继续启动后台同步循环,稍后重试");
+            }
+            Err(_) => {
+                error!("❌ 初始全量同步超时 (30秒)");
+                error!("将继续启动后台同步循环,稍后重试");
+            }
+        }
 
-        // 不依赖本地版本号进行判断，而是总是获取服务器数据并进行比较
-        // 或者可以记录服务器数据的某种标识（如校验和）来判断是否有变化
+        // 2. 启动后台同步循环
+        let sync_manager = self.clone();
 
         tokio::spawn(async move {
             let mut interval_timer = interval(sync_interval);
@@ -94,76 +118,41 @@ impl BoardSyncManager {
                 // 等待下一个同步时间点
                 interval_timer.tick().await;
 
-                // 使用 AssertUnwindSafe 包装逻辑以捕获 Panic
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| async {
-                    // 开始同步前，标记同步进行中
-                    {
-                        let mut sync_flag = sync_manager.sync_in_progress.write().await;
-                        *sync_flag = true;
-                    }
+                // 开始同步前，标记同步进行中
+                {
+                    let mut sync_flag = sync_manager.sync_in_progress.write().await;
+                    *sync_flag = true;
+                }
 
-                    tracing::debug!("开始执行 HTTP 全量同步...");
+                info!("开始执行 HTTP 全量同步...");
 
-                    // 尝试获取服务器数据
-                    let sync_result = match client.get_board().await {
-                        Ok(board_data) => {
-                            let board = sync_manager.local_board.clone();
-
-                            // 执行差异同步
-                            board.update_from_board(&board_data);
-
-                            info!("HTTP 全量同步完成");
-                            Ok(())
-                        }
-                        Err(e) => {
-                            error!("HTTP 全量同步失败: {:?}", e);
-                            Err(e)
-                        }
-                    };
-
-                    // 同步完成后，标记同步结束
-                    {
-                        let mut sync_flag = sync_manager.sync_in_progress.write().await;
-                        *sync_flag = false;
-                    }
-
-                    sync_result
-                }));
-
-                // 处理 catch_unwind 的结果
-                match result {
-                    Ok(future) => {
-                        // 正常执行，等待 future 完成
-                        match future.await {
-                            Ok(_) => {}
+                // 执行同步,添加超时保护
+                match tokio::time::timeout(Duration::from_secs(30), client.get_board()).await {
+                    Ok(Ok(board_data)) => {
+                        // 使用 catch_unwind 保护同步代码,防止 panic
+                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            sync_manager.local_board.update_from_board(&board_data);
+                        })) {
+                            Ok(_) => {
+                                info!("HTTP 全量同步完成");
+                            }
                             Err(e) => {
-                                // 这里是业务逻辑错误，已经在内部打印过了，不需要重复打印
-                                // 仅仅防止 loop 退出
-                                tracing::debug!("同步周期结束（含错误）: {:?}", e);
+                                error!("❌ update_from_board panic: {:?}", e);
                             }
                         }
                     }
-                    Err(e) => {
-                        // 捕获到 Panic！
-                        let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
-                            format!("Panic: {}", s)
-                        } else if let Some(s) = e.downcast_ref::<String>() {
-                            format!("Panic: {}", s)
-                        } else {
-                            "Unknown panic type".to_string()
-                        };
-
-                        error!(
-                            "❌ 同步任务发生严重恐慌 (Panic)，已捕获并尝试恢复: {}",
-                            panic_msg
-                        );
-
-                        // 尝试重置锁状态，防止死锁（虽然 unwind safe 不能保证完全安全，但在此时尽力而为）
-                        // 注意：如果是在获取写锁期间 panic，锁可能会中毒 (poisoned)，但在 tokio RwLock 中不会中毒，只是可能维持锁定状态
-                        // 我们尝试强制重置标志
-                        let mut sync_flag = sync_manager.sync_in_progress.write().await;
-                        *sync_flag = false;
+                    Ok(Err(e)) => {
+                        error!("HTTP 全量同步失败: {:?}", e);
                     }
+                    Err(_) => {
+                        error!("HTTP 全量同步超时 (30秒)");
+                    }
+                }
+
+                // 同步完成后，标记同步结束
+                {
+                    let mut sync_flag = sync_manager.sync_in_progress.write().await;
+                    *sync_flag = false;
                 }
             }
         });
