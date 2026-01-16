@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
-use crate::app::multi_token::cli::get_penalty_scale;
+use crate::app::multi_token::cli::get_penalty_sensitivity;
 use crate::app::multi_token::config::{PriorityPixel, TokenConfig, TokenEntry};
 use crate::app::multi_token::paint_batcher::PaintBatcher;
 use crate::app::multi_token::pixel_queue::PixelQueue;
@@ -329,26 +329,8 @@ impl MultiTokenService {
                 continue;
             }
 
-            // 计算总绘制频率 (∑R)
-            let total_recent_paints = local_board
-                .get_heatmap()
-                .iter()
-                .map(|entry| {
-                    let now = std::time::SystemTime::now();
-                    entry
-                        .value()
-                        .iter()
-                        .filter(|&&timestamp| {
-                            now.duration_since(timestamp).unwrap_or_default()
-                                < std::time::Duration::from_secs(10 * 60)
-                        })
-                        .count()
-                })
-                .sum::<usize>() as f64;
-
-            const MIN_TOTAL_PAINTS: f64 = 100.0; // 最小总绘画数，避免早期惩罚过高
-            let penalty_divisor = total_recent_paints.max(MIN_TOTAL_PAINTS);
-            let penalty_scale = get_penalty_scale() as f64;
+            // 获取惩罚敏感度系数
+            let sensitivity = get_penalty_sensitivity() as f64;
 
             // 遍历目标图像的所有像素进行比对
             let mut differences = Vec::new();
@@ -365,22 +347,50 @@ impl MultiTokenService {
                     && relative_x < target_image.img_width as i32
                     && relative_y < target_image.img_height as i32
                 {
+                    // 扩大基础优先级范围,并添加边缘增强
                     let base_priority =
                         if let Some(current_pixel) = local_board.get_pixel(pos.x, pos.y) {
                             if current_pixel != *target_color {
-                                ((pos.x + pos.y) % 8) as f64
+                                // 1. 基础填充优先级 (0-799)
+                                // 使用棋盘模式 + 随机扰动,确保均匀分散
+                                let chess_priority = ((pos.x + pos.y) % 8) as f64 * 100.0;
+                                let random_offset = ((pos.x * 7 + pos.y * 13) % 100) as f64;
+                                let fill_priority = chess_priority + random_offset;
+
+                                // 2. 边缘增强加成 (0-300)
+                                // 从 Canny 边缘检测数据中获取边缘强度
+                                let edge_strength = target_image
+                                    .pixel_canny_priorities
+                                    .get(pos)
+                                    .copied()
+                                    .unwrap_or(0.0);
+
+                                // 归一化到 0-1 范围,然后乘以加成系数
+                                let edge_bonus = (edge_strength / 255.0).min(1.0) * 300.0;
+
+                                // 3. 组合:填充 + 边缘增强
+                                // 总范围: 0-1099
+                                // - 平坦区域: 0-799 (无边缘加成)
+                                // - 边缘区域: 800-1099 (有边缘加成)
+                                fill_priority + edge_bonus
                             } else {
-                                continue; // 颜色一致，跳过
+                                continue; // 颜色一致,跳过
                             }
                         } else {
-                            255.0 // 缺少像素，最高优先级
+                            // 缺少像素,最高优先级
+                            // 保持远高于正常范围,确保优先填补
+                            10000.0
                         };
 
-                    // 计算归一化惩罚值并应用
-                    let recent_paints = local_board.calculate_penalty(pos);
-                    let penalty = (recent_paints / penalty_divisor) * penalty_scale;
-                    // 确保优先级不会变成负数,避免异常排序行为
-                    let final_priority = (base_priority - penalty).max(0.0);
+                    // 计算带时间衰减的热度分数
+                    let heat_score = local_board.calculate_heat_score(pos);
+
+                    // 乘法惩罚: penalty_factor ∈ (0, 1]
+                    // heat_score = 0 时, penalty_factor = 1 (无惩罚)
+                    // heat_score 越大, penalty_factor 越接近 0
+                    let penalty_factor = 1.0 / (1.0 + heat_score * sensitivity);
+
+                    let final_priority = base_priority * penalty_factor;
 
                     differences.push(PriorityPixel {
                         pos: *pos,

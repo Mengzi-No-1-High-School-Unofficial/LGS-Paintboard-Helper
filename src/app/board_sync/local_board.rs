@@ -219,20 +219,39 @@ impl LocalBoard {
         (self.width, self.height)
     }
 
-    pub fn calculate_penalty(&self, pos: &Pos) -> f64 {
-        // 计算10分钟内的绘制次数
-        let recent_paints = self.heatmap.get(pos).map_or(0, |entry| {
+    /// 计算带时间衰减的热度分数
+    ///
+    /// 返回值范围 [0, +∞),值越大表示该位置越"热"(被频繁绘制)
+    /// 使用线性时间衰减:越近的绘制权重越高
+    ///
+    /// # 参数
+    ///
+    /// * `pos` - 像素位置
+    ///
+    /// # 返回值
+    ///
+    /// 热度分数,0 表示该位置在时间窗口内没有被绘制过
+    pub fn calculate_heat_score(&self, pos: &Pos) -> f64 {
+        const DECAY_WINDOW_SECS: f64 = 600.0; // 10分钟衰减窗口
+
+        self.heatmap.get(pos).map_or(0.0, |entry| {
             let now = SystemTime::now();
             entry
                 .value()
                 .iter()
-                .filter(|&&timestamp| {
-                    now.duration_since(timestamp).unwrap_or_default() < HEATMAP_EXPIRE_DURATION
-                })
-                .count()
-        });
+                .filter_map(|&timestamp| {
+                    let elapsed = now.duration_since(timestamp).ok()?;
+                    let elapsed_secs = elapsed.as_secs_f64();
 
-        recent_paints as f64
+                    if elapsed_secs < DECAY_WINDOW_SECS {
+                        // 线性衰减: 越近的绘制权重越高 (1.0 -> 0.0)
+                        Some(1.0 - (elapsed_secs / DECAY_WINDOW_SECS))
+                    } else {
+                        None
+                    }
+                })
+                .sum()
+        })
     }
 
     /// 启动事件监听器，监听来自 SDK 的绘制事件并 update 本地画板状态
