@@ -27,19 +27,6 @@ pub struct BoardSyncManager {
 }
 
 impl BoardSyncManager {
-    /// 创建新的同步管理器
-    ///
-    /// # 返回值
-    ///
-    /// 返回初始化的同步管理器实例
-    pub fn new() -> Self {
-        Self {
-            local_board: Arc::new(LocalBoard::new(1000, 600)),
-            should_stop: Arc::new(RwLock::new(false)),
-            sync_in_progress: Arc::new(RwLock::new(false)),
-        }
-    }
-
     /// 使用已有的 LocalBoard 创建同步管理器
     ///
     /// # 参数
@@ -55,15 +42,6 @@ impl BoardSyncManager {
             should_stop: Arc::new(RwLock::new(false)),
             sync_in_progress: Arc::new(RwLock::new(false)),
         }
-    }
-
-    /// 获取本地画板数据的Arc引用
-    ///
-    /// # 返回值
-    ///
-    /// 返回指向本地画板数据的Arc引用
-    pub fn local_board(&self) -> Arc<LocalBoard> {
-        self.local_board.clone()
     }
 
     /// 开始同步循环

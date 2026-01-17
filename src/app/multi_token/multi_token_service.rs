@@ -18,7 +18,7 @@ use crate::app::multi_token::pixel_queue::PixelQueue;
 use crate::app::multi_token::token_manager::{TokenInfo, TokenManager};
 use crate::app::multi_token::token_worker::TokenWorker;
 use crate::app::utils::get_token_with_access_key;
-use winter_paintboard_sdk::{basic_client::AsyncClient, config::Config};
+use winter_paintboard_sdk::basic_client::AsyncClient;
 
 /// 多 Token 绘制服务
 ///
@@ -56,124 +56,6 @@ pub struct MultiTokenService {
 }
 
 impl MultiTokenService {
-    /// 创建新的多 Token 服务
-    ///
-    /// 使用默认的网格图算法阈值创建服务实例
-    ///
-    /// # 参数
-    ///
-    /// * `token_config` - Token配置
-    /// * `ws_url` - WebSocket URL（可选）
-    /// * `local_board` - 本地画板引用
-    /// * `target_image` - 目标图像数据
-    /// * `start_x` - 起始X坐标
-    /// * `start_y` - 起始Y坐标
-    /// * `comparison_interval` - 比对间隔时间
-    ///
-    /// # 返回值
-    ///
-    /// * `Ok(MultiTokenService)` - 成功创建的服务实例
-    /// * `Err` - 创建过程中发生错误
-    #[allow(dead_code)]
-    #[allow(clippy::too_many_arguments)]
-    pub async fn new(
-        token_config: TokenConfig,
-        ws_url: Option<String>,
-        local_board: Arc<LocalBoard>,
-        target_image: ProcessedImageData,
-        start_x: i32,
-        start_y: i32,
-        comparison_interval: Duration,
-        batch_size: usize,
-    ) -> Result<Self, Report> {
-        Self::with_canny_thresholds(
-            token_config,
-            ws_url,
-            local_board,
-            target_image,
-            start_x,
-            start_y,
-            comparison_interval,
-            20.0, // 默认低阈值
-            40.0, // 默认高阈值
-            batch_size,
-        )
-        .await
-    }
-
-    /// 创建新的多 Token 服务，支持配置网格图算法阈值
-    ///
-    /// # 参数
-    ///
-    /// * `token_config` - Token配置
-    /// * `ws_url` - WebSocket URL（可选）
-    /// * `local_board` - 本地画板引用
-    /// * `target_image` - 目标图像数据
-    /// * `start_x` - 起始X坐标
-    /// * `start_y` - 起始Y坐标
-    /// * `comparison_interval` - 比对间隔时间
-    /// * `canny_low_thresh` - 网格图算法低阈值
-    /// * `canny_high_thresh` - 网格图算法高阈值
-    ///
-    /// # 返回值
-    ///
-    /// * `Ok(MultiTokenService)` - 成功创建的服务实例
-    /// * `Err` - 创建过程中发生错误
-    #[allow(clippy::too_many_arguments)]
-    pub async fn with_canny_thresholds(
-        token_config: TokenConfig,
-        ws_url: Option<String>,
-        local_board: Arc<LocalBoard>,
-        target_image: ProcessedImageData,
-        start_x: i32,
-        start_y: i32,
-        comparison_interval: Duration,
-        _canny_low_thresh: f32,
-        _canny_high_thresh: f32,
-        batch_size: usize,
-    ) -> Result<Self, Report> {
-        // 解析所有 Token（将 access_key 转换为 token）
-        let tokens = Self::fetch_tokens(&token_config).await?;
-
-        // 创建共享客户端
-        let mut config = Config::default();
-        if let Some(url) = ws_url {
-            config.ws_url = url;
-        }
-        let shared_client = winter_paintboard_sdk::get_global_client(config).await?;
-
-        // 创建 TokenManager
-        let token_manager = Arc::new(TokenManager::new(tokens, token_config.cd_time_ms));
-
-        // 创建 Metrics 打印任务
-        let token_manager_clone = token_manager.clone();
-        let stop_signal = Arc::new(AtomicBool::new(false));
-        let metrics_handle = {
-            let stop_signal_for_metrics = stop_signal.clone();
-
-            tokio::spawn(async move {
-                Self::print_metrics_loop(token_manager_clone, stop_signal_for_metrics).await;
-            })
-        };
-
-        Ok(Self {
-            workers: Vec::new(),
-            batcher_handle: None,
-            comparison_handle: None,
-            metrics_handle: Some(metrics_handle),
-            pixel_queue: Arc::new(PixelQueue::new()),
-            local_board,
-            target_image,
-            start_x,
-            start_y,
-            stop_signal,
-            comparison_interval,
-            token_manager,
-            shared_client,
-            batch_size,
-        })
-    }
-
     /// 使用已有的 LocalBoard 创建服务 (用于 Worker 模式)
     ///
     /// # 参数

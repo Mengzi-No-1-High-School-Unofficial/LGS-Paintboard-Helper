@@ -9,13 +9,10 @@ LGS 冬日绘板助手是一个功能强大的命令行工具，使用 Rust 编�
 
 ## 🌟 功能特性
 
-- **多 Token 并发绘制**: 支持使用多个用户 Token 同时绘制，大幅提升绘制效率
-- **智能图像预处理**: 集成网格图算法，优先绘制重要区域以提高视觉效果
-- **本地画板同步**: 实时同步本地画板状态，避免重复绘制和冲突
-- **灵活绘制模式**: 支持增量修改、循环绘制和单次绘制等多种模式
+- **主从架构模式**: 支持 Master-Worker 架构,由 Master 负责全局同步,Worker 负责并发绘制
+- **智能图像预处理**: 集成网格图算法,优先绘制重要区域以提高视觉效果
 - **实时指标监控**: 提供详细的绘制统计信息
-- **自动导出功能**: 支持定期导出当前画板状态和热点图
-- **CD 时间管理**: 自动管理 Token 冷却时间，避免触发频率限制
+- **CD 时间管理**: 自动管理 Token 冷却时间,避免触发频率限制
 
 ## 📋 项目架构
 
@@ -67,38 +64,20 @@ LGS 冬日绘板助手是一个功能强大的命令行工具，使用 Rust 编�
 # 查看帮助信息
 ./lgs-paintboard --help
 
-# 查看多 Token 模式帮助
-./lgs-paintboard multi-token --help
+### 主从绘制模式 (推荐)
 
-# 查看项目信息
-./lgs-paintboard about
+本项目现在完全采用主从模式。
 
-# 获取当前画板状态
-./lgs-paintboard get-board --uid <uid> --access-key <access_key>
-```
+1. **启动 Master**: 负责同步画板数据
+   ```bash
+   ./lgs-paintboard master --ws-url <ws_url> --socket-path /tmp/paintboard.sock
+   ```
 
-### 多 Token 绘制模式
+2. **启动 Worker**: 执行绘制任务
+   ```bash
+   ./lgs-paintboard worker --master-socket /tmp/paintboard.sock --config tokens.json --image image.png --x 100 --y 100
+   ```
 
-多 Token 模式是本工具的核心功能，允许使用多个账户同时绘制图像：
-
-```bash
-./lgs-paintboard multi-token --config config.json --image image.png --x 0 --y 0
-```
-
-#### 参数说明
-
-- `--config`: Token 配置文件路径（JSON 格式）
-- `--image`: 要绘制的图片路径（支持 PNG、JPG 等格式）
-- `--x`, `--y`: 绘制起始坐标
-- `--width`, `--height`: 图片缩放尺寸（可选）
-- `--cd-time`: Token 冷却时间（毫秒，默认 3000）
-- `--comparison-interval`: 画板比对间隔（毫秒，默认 5000）
-- `--enable-export`: 启用画板状态导出
-- `--enable-heatmap-export`: 启用热点图导出
-- `--export-dir`: 导出目录（默认 "exports"）
-- `--export-interval`: 导出间隔（秒，默认 30）
-- `--canny-low-thresh`, `--canny-high-thresh`: 网格图算法阈值
-- `--penalty-scale`: 惩罚系数（用于避免重复绘制同一位置）
 
 ## ⚙️ 配置文件
 
@@ -138,10 +117,10 @@ LGS 冬日绘板助手是一个功能强大的命令行工具，使用 Rust 编�
 
 ### 本地画板同步
 
-工具通过 WebSocket 实时同步画板状态到本地，确保：
+Master 通过 WebSocket 实时同步画板状态,并通过 Unix Socket 分发给所有连接的 Worker,确保:
 - 避免重复绘制已正确的像素
 - 实时获取最新画板状态
-- 提高绘制效率
+- 极低的同步延迟
 
 
 ## 🛠️ 工具脚本
