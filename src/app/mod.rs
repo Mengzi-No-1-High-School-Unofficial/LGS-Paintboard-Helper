@@ -3,6 +3,7 @@
 //! 该模块包含应用程序的核心逻辑，处理命令行参数并根据不同的子命令执行相应的功能。
 //! 主要功能包括多Token绘制模式、获取画板状态和显示项目信息。
 
+pub mod api;
 pub mod board_sync;
 pub mod cli;
 pub mod image_processing;
@@ -10,10 +11,13 @@ pub mod ipc;
 pub mod multi_token;
 pub mod utils;
 
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
 use winter_paintboard_sdk::basic_client::HttpProvider;
 use winter_paintboard_sdk::config::Config;
+
+use crate::app::board_sync::LocalBoard;
 
 use crate::app::{
     cli::Cli,
@@ -57,7 +61,9 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             ws_url,
             sync_interval,
             socket_path,
-        } => run_master_mode(ws_url, sync_interval, socket_path).await,
+            metrics_db,
+            api_port,
+        } => run_master_mode(ws_url, sync_interval, socket_path, metrics_db, api_port).await,
         Commands::Worker {
             master_socket,
             ws_url,
@@ -212,6 +218,8 @@ async fn run_master_mode(
     ws_url: Option<String>,
     sync_interval: u64,
     socket_path: std::path::PathBuf,
+    metrics_db: Option<String>,
+    api_port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("启动 Master 模式...");
 
@@ -224,11 +232,20 @@ async fn run_master_mode(
     // 创建客户端
     let client = winter_paintboard_sdk::get_global_client(config).await?;
 
-    // 创建并启动 Master
-    let master = ipc::SyncMaster::new(
+    // 创建 Master
+    let mut master = ipc::SyncMaster::new(
         socket_path,
         tokio::time::Duration::from_millis(sync_interval),
     );
+
+    // 如果提供了 metrics_db，启用监控
+    if let Some(db_path) = metrics_db {
+        info!(
+            "启用监控功能，数据库路径: {}, API 端口: {}",
+            db_path, api_port
+        );
+        master = master.with_metrics(&db_path, api_port).await?;
+    }
 
     master
         .start(client)
@@ -267,8 +284,7 @@ async fn run_worker_mode(
         });
 
     // 连接到 Master
-    let worker = ipc::SyncWorker::new(master_socket);
-    let local_board = worker.connect().await?;
+    let worker = ipc::SyncWorker::new(master_socket, &image, x as u32, y as u32);
 
     // 配置 WebSocket (writeonly 模式)
     let mut config = Config::default();
@@ -302,6 +318,40 @@ async fn run_worker_mode(
         canny_high_thresh,
     )?;
 
+    // 创建并启动绘制服务（先使用临时 board）
+    let mut service = multi_token::MultiTokenService::with_board(
+        token_config,
+        processed_image.clone(),
+        x,
+        y,
+        Arc::new(LocalBoard::new(1000, 600)), // 临时 board
+        Duration::from_millis(comparison_interval),
+        batch_size,
+        client,
+    )
+    .await?
+    .with_metrics(worker.worker_id().to_string());
+
+    service.start().await?;
+
+    let stop_signal = service.stop_signal();
+    let pixel_queue = service.pixel_queue();
+    let token_manager = service.token_manager();
+
+    // 创建监控上下文并连接到 Master
+    let local_board = if let Some(collector) = service.metrics_collector() {
+        let metrics_ctx = ipc::WorkerMetricsContext {
+            metrics_collector: collector,
+            token_manager: token_manager.clone(),
+            pixel_queue: pixel_queue.clone(),
+        };
+        // 启用监控并连接
+        worker.connect_with_metrics(metrics_ctx).await?
+    } else {
+        // 不启用监控
+        worker.connect().await?
+    };
+
     // 设置感兴趣区域（优化同步性能）
     let interest_pixels: Vec<winter_paintboard_sdk::models::Pos> = processed_image
         .full_scale_operations
@@ -309,24 +359,6 @@ async fn run_worker_mode(
         .map(|(pos, _)| *pos)
         .collect();
     local_board.set_interest_pixels(interest_pixels).await;
-
-    // 创建并启动绘制服务
-    let mut service = multi_token::MultiTokenService::with_board(
-        token_config,
-        processed_image.clone(),
-        x,
-        y,
-        local_board.clone(),
-        Duration::from_millis(comparison_interval),
-        batch_size,
-        client,
-    )
-    .await?;
-
-    service.start().await?;
-
-    let stop_signal = service.stop_signal();
-    let pixel_queue = service.pixel_queue();
 
     // 运行比对和绘制循环
     info!("绘制 Worker 已就绪, 按 Ctrl+C 停止...");

@@ -222,4 +222,47 @@ impl TokenManager {
         // 实际使用中应该直接使用新接口
         None
     }
+
+    /// 获取 Token 总数（用于监控）
+    pub fn get_total_tokens(&self) -> usize {
+        self.len()
+    }
+
+    /// 获取可用 Token 数量（用于监控）
+    pub fn get_available_tokens_count(&self) -> usize {
+        let tokens = self.tokens.lock();
+        let now = Instant::now();
+
+        tokens
+            .iter()
+            .filter(|token| {
+                match token.state {
+                    TokenState::Available => true,
+                    TokenState::InCooldown => {
+                        // 检查是否已经过了冷却时间
+                        if let Some(end_time) = token.cd_end_time {
+                            now >= end_time
+                        } else {
+                            false
+                        }
+                    }
+                    TokenState::Acquired => false,
+                }
+            })
+            .count()
+    }
+
+    /// 获取冷却中 Token 数量（用于监控）
+    pub fn get_cooldown_tokens_count(&self) -> usize {
+        let tokens = self.tokens.lock();
+        let now = Instant::now();
+
+        tokens
+            .iter()
+            .filter(|token| {
+                matches!(token.state, TokenState::InCooldown)
+                    && token.cd_end_time.map_or(false, |end| now < end)
+            })
+            .count()
+    }
 }

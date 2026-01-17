@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::metrics::WorkerMetrics;
+
 /// Master → Worker 消息
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum MasterMessage {
@@ -51,6 +53,9 @@ pub enum WorkerMessage {
 
     /// 心跳响应
     HeartbeatAck { timestamp: u64 },
+
+    /// 监控数据上报
+    MetricsReport { metrics: WorkerMetrics },
 
     /// Worker 断开连接
     Disconnect { reason: String },

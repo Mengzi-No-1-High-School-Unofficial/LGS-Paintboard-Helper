@@ -16,6 +16,7 @@ use tracing::{debug, error, info, warn};
 use crate::app::board_sync::{BoardSyncManager, LocalBoard};
 use winter_paintboard_sdk::event::{self, PaintEvent};
 
+use super::metrics::MetricsAggregator;
 use super::protocol::{MasterMessage, WorkerMessage};
 
 /// Worker 连接信息
@@ -30,6 +31,10 @@ pub struct SyncMaster {
     socket_path: PathBuf,
     workers: Arc<RwLock<HashMap<String, WorkerConnection>>>,
     sync_interval: Duration,
+    /// 监控数据聚合器（可选）
+    metrics_aggregator: Option<Arc<MetricsAggregator>>,
+    /// HTTP API 端口（可选）
+    api_port: Option<u16>,
 }
 
 impl SyncMaster {
@@ -39,7 +44,24 @@ impl SyncMaster {
             socket_path,
             workers: Arc::new(RwLock::new(HashMap::new())),
             sync_interval,
+            metrics_aggregator: None,
+            api_port: None,
         }
+    }
+
+    /// 启用监控功能
+    ///
+    /// # 参数
+    ///
+    /// * `db_path` - SurrealDB 数据库路径
+    /// * `api_port` - HTTP API 端口
+    pub async fn with_metrics(mut self, db_path: &str, api_port: u16) -> Result<Self> {
+        let aggregator = MetricsAggregator::new(db_path)
+            .await
+            .map_err(|e| eyre!("Failed to create metrics aggregator: {}", e))?;
+        self.metrics_aggregator = Some(Arc::new(aggregator));
+        self.api_port = Some(api_port);
+        Ok(self)
     }
 
     /// 启动 Master
@@ -128,6 +150,23 @@ impl SyncMaster {
             master.run_heartbeat_loop().await;
         });
 
+        // 启动 HTTP API 服务器（如果启用）
+        if let (Some(aggregator), Some(port)) = (&self.metrics_aggregator, self.api_port) {
+            let router = crate::app::api::create_metrics_router(aggregator.clone());
+            let addr = format!("0.0.0.0:{}", port);
+            info!("Starting HTTP API server on {}", addr);
+
+            let listener = tokio::net::TcpListener::bind(&addr)
+                .await
+                .map_err(|e| eyre!("Failed to bind API server: {}", e))?;
+
+            tokio::spawn(async move {
+                if let Err(e) = axum::serve(listener, router).await {
+                    error!("API server error: {}", e);
+                }
+            });
+        }
+
         // 启动 Socket 服务器 (阻塞)
         self.run_socket_server().await
     }
@@ -136,6 +175,7 @@ impl SyncMaster {
         SyncMasterInner {
             local_board: self.local_board.clone(),
             workers: self.workers.clone(),
+            metrics_aggregator: self.metrics_aggregator.clone(),
         }
     }
 
@@ -177,6 +217,7 @@ impl Drop for SyncMaster {
 struct SyncMasterInner {
     local_board: Arc<LocalBoard>,
     workers: Arc<RwLock<HashMap<String, WorkerConnection>>>,
+    metrics_aggregator: Option<Arc<MetricsAggregator>>,
 }
 
 impl SyncMasterInner {
@@ -229,6 +270,14 @@ impl SyncMasterInner {
                         worker.last_heartbeat = Instant::now();
                     }
                 }
+                Ok(WorkerMessage::MetricsReport { metrics }) => {
+                    // 处理监控数据上报
+                    if let Some(aggregator) = &self.metrics_aggregator {
+                        if let Err(e) = aggregator.record_metrics(metrics).await {
+                            warn!("Failed to record metrics from {}: {}", worker_id, e);
+                        }
+                    }
+                }
                 Ok(WorkerMessage::Disconnect { reason }) => {
                     info!("Worker {} disconnecting: {}", worker_id, reason);
                     break;
@@ -243,6 +292,9 @@ impl SyncMasterInner {
 
         // 5. 清理
         self.workers.write().await.remove(&worker_id);
+        if let Some(aggregator) = &self.metrics_aggregator {
+            aggregator.remove_worker(&worker_id);
+        }
         info!("Worker {} disconnected", worker_id);
 
         Ok(())

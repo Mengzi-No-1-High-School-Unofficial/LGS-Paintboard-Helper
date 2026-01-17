@@ -74,6 +74,14 @@ pub enum Commands {
         /// Unix Socket 路径
         #[arg(long, default_value = "/tmp/lgs_paintboard.sock")]
         socket_path: std::path::PathBuf,
+
+        /// 启用监控并指定 SurrealDB 数据库路径
+        #[arg(long)]
+        metrics_db: Option<String>,
+
+        /// HTTP API 端口（需要同时指定 --metrics-db）
+        #[arg(long, default_value_t = 8080)]
+        api_port: u16,
     },
 
     /// 绘制 Worker 模式：从 Master 接收数据并执行绘制

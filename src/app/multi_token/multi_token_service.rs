@@ -11,6 +11,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::app::board_sync::LocalBoard;
 use crate::app::image_processing::ProcessedImageData;
+use crate::app::ipc::MetricsCollector;
 use crate::app::multi_token::cli::get_penalty_sensitivity;
 use crate::app::multi_token::config::{PriorityPixel, TokenConfig, TokenEntry};
 use crate::app::multi_token::paint_batcher::PaintBatcher;
@@ -51,6 +52,10 @@ pub struct MultiTokenService {
     shared_client: Arc<AsyncClient>,
     /// 批处理大小
     batch_size: usize,
+    /// 监控数据采集器（可选）
+    metrics_collector: Option<Arc<MetricsCollector>>,
+    /// 当前差异像素数（用于监控）
+    current_diff_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl MultiTokenService {
@@ -97,7 +102,30 @@ impl MultiTokenService {
             token_manager,
             shared_client,
             batch_size,
+            metrics_collector: None,
+            current_diff_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
+    }
+
+    /// 启用监控功能
+    ///
+    /// # 参数
+    ///
+    /// * `worker_id` - Worker 唯一标识
+    pub fn with_metrics(mut self, worker_id: String) -> Self {
+        self.metrics_collector = Some(Arc::new(MetricsCollector::new(worker_id)));
+        self
+    }
+
+    /// 获取监控数据采集器
+    pub fn metrics_collector(&self) -> Option<Arc<MetricsCollector>> {
+        self.metrics_collector.clone()
+    }
+
+    /// 获取当前差异像素数
+    pub fn current_diff_count(&self) -> usize {
+        self.current_diff_count
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 获取像素队列
@@ -108,6 +136,11 @@ impl MultiTokenService {
     /// 获取停止信号
     pub fn stop_signal(&self) -> Arc<AtomicBool> {
         self.stop_signal.clone()
+    }
+
+    /// 获取 Token 管理器
+    pub fn token_manager(&self) -> Arc<TokenManager> {
+        self.token_manager.clone()
     }
 
     /// 启动服务
@@ -131,8 +164,9 @@ impl MultiTokenService {
         let mut batcher = PaintBatcher::new(
             batch_receiver,
             self.shared_client.clone(),
-            self.batch_size,            // 批处理大小限制
-            Duration::from_millis(200), // 时间限制
+            self.batch_size,                // 批处理大小限制
+            Duration::from_millis(200),     // 时间限制
+            self.metrics_collector.clone(), // 监控数据采集器
         );
 
         self.batcher_handle = Some(tokio::spawn(async move {

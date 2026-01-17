@@ -1,12 +1,14 @@
 //! `PaintBatcher` 模块实现了绘制操作的批量处理和调度。
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 use winter_paintboard_sdk::basic_client::AsyncClient;
 use winter_paintboard_sdk::models::PaintOperation;
 use winter_paintboard_sdk::PaintboardClientTrait;
+
+use crate::app::ipc::MetricsCollector;
 
 /// 批量绘制处理器。
 ///
@@ -24,6 +26,8 @@ pub struct PaintBatcher {
     batch_size_limit: usize,
     /// 批处理发送的时间间隔上限。
     time_limit: Duration,
+    /// 监控数据采集器（可选）
+    metrics_collector: Option<Arc<MetricsCollector>>,
 }
 
 impl PaintBatcher {
@@ -34,11 +38,13 @@ impl PaintBatcher {
     /// - `client`: 共享的 `AsyncClient` 实例。
     /// - `batch_size_limit`: 当批次中的操作数达到此值时，将触发发送。
     /// - `time_limit`: 自上次发送以来，若超过此时间，将触发发送。
+    /// - `metrics_collector`: 可选的监控数据采集器
     pub fn new(
         receiver: mpsc::UnboundedReceiver<PaintOperation>,
         client: Arc<AsyncClient>,
         batch_size_limit: usize,
         time_limit: Duration,
+        metrics_collector: Option<Arc<MetricsCollector>>,
     ) -> Self {
         Self {
             receiver,
@@ -46,6 +52,7 @@ impl PaintBatcher {
             batch: Vec::with_capacity(batch_size_limit),
             batch_size_limit,
             time_limit,
+            metrics_collector,
         }
     }
 
@@ -103,21 +110,43 @@ impl PaintBatcher {
         // 使用 `std::mem::take` 高效地移出当前批次，为新任务准备数据
         let batch_to_send = std::mem::take(&mut self.batch);
         let client = self.client.clone();
+        let metrics_collector = self.metrics_collector.clone();
 
         // 生成一个新任务来发送批处理
         tokio::spawn(async move {
             let batch_len = batch_to_send.len();
+            let start_time = Instant::now();
+
             tracing::debug!("刷新批处理，操作数: {}", batch_len);
 
             let result = client.paint_batch_multi_token(batch_to_send).await;
 
             match result {
                 Ok(_) => {
-                    tracing::info!("成功发送 {} 个绘制操作的批处理", batch_len);
+                    let delay_ms = start_time.elapsed().as_millis() as u64;
+                    tracing::info!(
+                        "成功发送 {} 个绘制操作的批处理，延迟: {}ms",
+                        batch_len,
+                        delay_ms
+                    );
+
+                    // 记录监控数据：批次中的每个操作都算作成功
+                    if let Some(collector) = metrics_collector {
+                        for _ in 0..batch_len {
+                            collector.record_paint_success(delay_ms);
+                        }
+                    }
                 }
                 Err(e) => {
                     // 整个批次发送失败，例如网络错误
                     tracing::error!("批量发送失败: {:?}", e);
+
+                    // 记录监控数据：批次中的每个操作都算作失败
+                    if let Some(collector) = metrics_collector {
+                        for _ in 0..batch_len {
+                            collector.record_paint_failure();
+                        }
+                    }
                 }
             }
         });
