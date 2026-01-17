@@ -222,22 +222,4 @@ impl TokenManager {
         // 实际使用中应该直接使用新接口
         None
     }
-
-    /// 获取所有 Token 信息（兼容旧接口）
-    ///
-    /// # 返回值
-    ///
-    /// 返回所有Token信息的列表
-    pub fn get_all_tokens(&self) -> Vec<TokenInfo> {
-        let tokens = self.tokens.lock();
-        tokens
-            .iter()
-            .map(|t| TokenInfo {
-                uid: t.uid,
-                token: t.token.clone(),
-                last_paint_time: None,
-                is_available: t.state == TokenState::Available,
-            })
-            .collect()
-    }
 }

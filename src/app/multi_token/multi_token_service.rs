@@ -31,8 +31,6 @@ pub struct MultiTokenService {
     batcher_handle: Option<tokio::task::JoinHandle<()>>,
     /// 比对循环线程句柄
     comparison_handle: Option<tokio::task::JoinHandle<()>>,
-    /// 指标打印线程句柄
-    metrics_handle: Option<tokio::task::JoinHandle<()>>,
     /// 像素队列，用于存储待绘制的像素
     pixel_queue: Arc<PixelQueue>,
     /// 本地画板的共享引用
@@ -85,20 +83,9 @@ impl MultiTokenService {
         // 创建 TokenManager 用于解析 Token
         let token_manager = Arc::new(TokenManager::new(tokens, token_config.cd_time_ms));
 
-        // 启动 Metrics 打印任务 (每 5 秒打印一次)
-        let metrics_handle = {
-            let token_manager_clone = token_manager.clone();
-            let stop_signal_for_metrics = stop_signal.clone();
-
-            tokio::spawn(async move {
-                Self::print_metrics_loop(token_manager_clone, stop_signal_for_metrics).await;
-            })
-        };
-
         Ok(Self {
             workers: Vec::new(),
             batcher_handle: None,
-            metrics_handle: Some(metrics_handle),
             comparison_handle: None,
             pixel_queue: Arc::new(PixelQueue::new()),
             local_board,
@@ -226,13 +213,6 @@ impl MultiTokenService {
         if let Some(handle) = self.comparison_handle.take() {
             if let Err(e) = handle.await {
                 error!("比对循环任务等待错误: {:?}", e);
-            }
-        }
-
-        // 等待指标打印循环完成
-        if let Some(handle) = self.metrics_handle.take() {
-            if let Err(e) = handle.await {
-                error!("指标打印循环任务等待错误: {:?}", e);
             }
         }
 
@@ -439,37 +419,5 @@ impl MultiTokenService {
         }
 
         Ok(tokens)
-    }
-
-    /// 打印指标循环
-    ///
-    /// 定期打印绘制指标，包括总绘制数、成功/失败数等
-    ///
-    /// # 参数
-    ///
-    /// * `token_manager` - Token管理器
-    /// * `stop_signal` - 停止信号
-    async fn print_metrics_loop(token_manager: Arc<TokenManager>, stop_signal: Arc<AtomicBool>) {
-        let mut interval_timer = interval(Duration::from_secs(60));
-
-        loop {
-            if stop_signal.load(Ordering::Acquire) {
-                break;
-            }
-
-            interval_timer.tick().await;
-
-            info!("=== 全局绘制指标 ===");
-            info!("总绘制像素数: 0");
-            info!("成功绘制像素数: 0");
-            info!("失败绘制像素数: 0");
-            info!("===================");
-
-            // 打印每个 Token 的指标
-            for token_info in token_manager.get_all_tokens() {
-                let uid = token_info.uid;
-                info!("Token UID: {} 无指标数据", uid);
-            }
-        }
     }
 }
