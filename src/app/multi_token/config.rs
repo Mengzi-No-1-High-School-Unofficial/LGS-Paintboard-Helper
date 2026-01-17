@@ -4,7 +4,6 @@
 //! 以及优先级像素结构用于网格图算法。
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 /// Token 配置结构
 ///
@@ -42,71 +41,7 @@ pub struct TokenEntry {
     pub token: Option<String>,
 }
 
-impl TokenConfig {
-    /// 从文件加载配置
-    ///
-    /// 从指定路径的JSON文件中加载Token配置
-    ///
-    /// # 参数
-    ///
-    /// * `path` - 配置文件路径
-    ///
-    /// # 返回值
-    ///
-    /// * `Ok(TokenConfig)` - 成功加载的配置
-    /// * `Err` - 加载过程中发生错误
-    pub fn from_file(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = std::fs::read_to_string(path)?;
-        let config: TokenConfig = serde_json::from_str(&content)?;
-        Ok(config)
-    }
-
-    /// 从命令行参数构建配置
-    ///
-    /// 根据命令行提供的访问密钥、用户ID和CD时间构建Token配置
-    ///
-    /// # 参数
-    ///
-    /// * `access_keys` - 逗号分隔的访问密钥字符串
-    /// * `uids` - 逗号分隔的用户ID字符串
-    /// * `cd_time` - CD时间（毫秒）
-    ///
-    /// # 返回值
-    ///
-    /// * `Ok(TokenConfig)` - 构建的配置
-    /// * `Err` - 构建过程中发生错误
-    #[allow(dead_code)]
-    pub fn from_cli_args(
-        access_keys: String,
-        uids: String,
-        cd_time: u64,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let keys: Vec<&str> = access_keys.split(',').collect();
-        let uids: Vec<u32> = uids
-            .split(',')
-            .map(|s| s.trim().parse())
-            .collect::<Result<Vec<_>, _>>()?;
-
-        if keys.len() != uids.len() {
-            return Err("access_keys 和 uids 数量不匹配".into());
-        }
-
-        let tokens = keys
-            .into_iter()
-            .zip(uids)
-            .map(|(key, uid)| TokenEntry {
-                uid,
-                access_key: Some(key.to_string()),
-                token: None,
-            })
-            .collect();
-
-        Ok(TokenConfig {
-            cd_time_ms: cd_time,
-            tokens,
-        })
-    }
-}
+impl TokenConfig {}
 
 /// 优先级像素 - 带优先级的绘制任务
 ///

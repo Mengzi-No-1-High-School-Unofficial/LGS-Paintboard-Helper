@@ -73,12 +73,6 @@ impl LocalBoard {
         *interest = Some(pixels);
     }
 
-    /// 获取感兴趣的像素点列表的副本
-    pub async fn get_interest_pixels(&self) -> Option<Vec<Pos>> {
-        let interest = self.interest_pixels.read().await;
-        interest.clone()
-    }
-
     /// 更新像素颜色
     ///
     /// # 参数
@@ -110,15 +104,6 @@ impl LocalBoard {
         } else {
             None
         }
-    }
-
-    /// 获取热力图的Arc引用，用于外部读取
-    ///
-    /// # 返回值
-    ///
-    /// 返回指向热力图数据的Arc引用
-    pub fn get_heatmap(&self) -> &Arc<DashMap<Pos, Vec<SystemTime>>> {
-        &self.heatmap
     }
 
     /// 从Board对象更新本地数据 - 这是权威数据
@@ -286,15 +271,6 @@ impl LocalBoard {
     /// 如果已初始化返回true，否则返回false
     pub fn is_initialized(&self) -> bool {
         self.is_initialized.load(Ordering::Relaxed)
-    }
-
-    /// 获取画板尺寸
-    ///
-    /// # 返回值
-    ///
-    /// 返回画板的宽度和高度
-    pub fn dimensions(&self) -> (u16, u16) {
-        (self.width, self.height)
     }
 
     /// 计算带时间衰减的热度分数
@@ -518,9 +494,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_board_creation() {
-        let board = LocalBoard::new(1000, 600);
-        assert_eq!(board.dimensions(), (1000, 600));
-        assert!(!board.is_initialized());
+        let _board = LocalBoard::new(1000, 600);
+        assert!(!_board.is_initialized());
     }
 
     #[tokio::test]

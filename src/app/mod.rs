@@ -5,21 +5,18 @@
 
 pub mod board_sync;
 pub mod cli;
-pub mod export;
 pub mod image_processing;
 pub mod ipc;
 pub mod multi_token;
 pub mod utils;
 
-use std::sync::Arc;
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 use tracing::{error, info};
 use winter_paintboard_sdk::basic_client::HttpProvider;
 use winter_paintboard_sdk::config::Config;
 
 use crate::app::{
     cli::Cli,
-    export::start_export_if_enabled,
     utils::{get_token_with_access_key, validate_auth_args},
 };
 
@@ -55,49 +52,6 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::About => {
             // 显示项目信息和作者信息
             run_about_mode().await
-        }
-        Commands::MultiToken {
-            config,
-            access_keys: _,
-            uids: _,
-            cd_time,
-            ws_url,
-            image,
-            x,
-            y,
-            width,
-            height,
-            comparison_interval,
-            enable_export,
-            enable_heatmap_export,
-            export_dir,
-            export_interval,
-            canny_low_thresh,
-            canny_high_thresh,
-            penalty_scale,
-            batch_size,
-        } => {
-            // 多 Token 模式
-            run_multi_token_mode(
-                config,
-                ws_url,
-                image,
-                x,
-                y,
-                width,
-                height,
-                cd_time,
-                comparison_interval,
-                enable_export,
-                enable_heatmap_export,
-                export_dir,
-                export_interval,
-                canny_low_thresh,
-                canny_high_thresh,
-                penalty_scale,
-                batch_size,
-            )
-            .await
         }
         Commands::Master {
             ws_url,
@@ -137,174 +91,6 @@ pub async fn run_app(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             .await
         }
     }
-}
-
-/// 运行多 Token 绘制模式
-///
-/// 该模式使用多个用户 Token 并发绘制图像，通过网格图算法优化绘制优先级，
-/// 并支持本地画板同步、绘制结果导出等功能。
-///
-/// # 参数
-///
-/// * `config_path` - Token 配置文件路径
-/// * `ws_url` - WebSocket 服务器 URL（可选）
-/// * `image` - 要绘制的图像文件路径
-/// * `x` - 绘制起始 X 坐标
-/// * `y` - 绘制起始 Y 坐标
-/// * `width` - 图像宽度（可选，用于缩放）
-/// * `height` - 图像高度（可选，用于缩放）
-/// * `cd_time` - Token 冷却时间（毫秒）
-/// * `comparison_interval` - 画板状态比对间隔（毫秒）
-/// * `enable_export` - 是否启用画板导出功能
-/// * `enable_heatmap_export` - 是否启用热点图导出功能
-/// * `export_dir` - 导出目录路径
-/// * `export_interval` - 导出时间间隔（秒）
-/// * `canny_low_thresh` - 网格图算法低阈值
-/// * `canny_high_thresh` - 网格图算法高阈值
-/// * `penalty_scale` - 惩罚系数，用于避免重复绘制同一位置
-///
-/// # 返回值
-///
-/// * `Ok(())` - 多 Token 模式正常执行完成
-/// * `Err` - 执行过程中发生错误
-#[allow(clippy::too_many_arguments)]
-pub async fn run_multi_token_mode(
-    config_path: PathBuf,
-    ws_url: Option<String>,
-    image: PathBuf,
-    x: i32,
-    y: i32,
-    width: Option<u32>,
-    height: Option<u32>,
-    _cd_time: u64,
-    comparison_interval: u64,
-    enable_export: bool,
-    enable_heatmap_export: bool,
-    export_dir: String,
-    export_interval: u64,
-    canny_low_thresh: f32,
-    canny_high_thresh: f32,
-    penalty_scale: f32,
-    batch_size: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::app::board_sync::BoardSyncManager;
-    use crate::app::image_processing::process_image_at_all_scales;
-    use crate::app::multi_token::multi_token_service::MultiTokenService;
-    use winter_paintboard_sdk::{config::Config, get_global_client, PaintboardClientTrait};
-
-    info!("启动多 Token 绘制模式...");
-
-    let _ = multi_token::cli::PENALTY_SENSITIVITY
-        .set(penalty_scale)
-        .map_err(|_e| {
-            let e = color_eyre::Report::msg("无法设置值 PENALTY_SENSITIVITY");
-            error!("{}", e);
-            e
-        });
-
-    // 加载配置
-    let token_config = crate::app::multi_token::config::TokenConfig::from_file(&config_path)?;
-
-    // 创建同步管理器
-    let sync_manager = BoardSyncManager::new();
-
-    // 为同步任务创建新的客户端
-    let mut sync_config = Config::default();
-    if let Some(url) = &ws_url {
-        sync_config.ws_url = url.clone();
-    }
-
-    let sync_client: Arc<dyn PaintboardClientTrait + Send + Sync> =
-        get_global_client(sync_config).await?;
-
-    // 处理图片
-    info!("正在预处理图片数据...");
-    let processed_image_data = process_image_at_all_scales(
-        &image,
-        width,
-        height,
-        x,
-        y,
-        canny_low_thresh,
-        canny_high_thresh,
-    )?;
-
-    // 设置感兴趣区域（优化同步性能）
-    let interest_pixels: Vec<winter_paintboard_sdk::models::Pos> = processed_image_data
-        .full_scale_operations
-        .iter()
-        .map(|(pos, _)| *pos)
-        .collect();
-    sync_manager
-        .local_board()
-        .set_interest_pixels(interest_pixels)
-        .await;
-
-    // 使用第一个 token 的认证信息
-    if let Some(first_token) = token_config.tokens.first() {
-        let _token = match (&first_token.token, &first_token.access_key) {
-            (Some(t), _) => t.clone(),
-            (None, Some(ak)) => get_token_with_access_key(first_token.uid, ak).await?,
-            _ => {
-                error!("配置文件中的第一个 Token 条目缺少 token 或 access_key");
-                return Err("无效的 Token 配置".into());
-            }
-        };
-    }
-
-    // 启动增量同步循环
-    sync_manager
-        .start_sync_loop(
-            sync_client,
-            tokio::time::Duration::from_millis(std::cmp::max(comparison_interval, 2500)),
-            Option::<std::sync::Arc<fn(Vec<(u32, u32, winter_paintboard_sdk::Rgb)>)>>::None,
-        )
-        .await?;
-
-    info!("本地绘版数据同步已启动");
-
-    // 启动绘版图片导出服务（如果启用）
-    start_export_if_enabled(
-        &sync_manager,
-        enable_export,
-        export_dir.clone(),
-        export_interval,
-    )
-    .await?;
-
-    // 启动热点图导出服务（如果启用）
-    crate::app::export::start_heatmap_export_if_enabled(
-        &sync_manager,
-        enable_heatmap_export,
-        export_dir.clone(),
-        export_interval,
-    )
-    .await?;
-
-    // 创建并启动多 Token 服务
-    let mut service = MultiTokenService::with_canny_thresholds(
-        token_config,
-        ws_url,
-        sync_manager.local_board(),
-        processed_image_data,
-        x,
-        y,
-        tokio::time::Duration::from_millis(comparison_interval),
-        canny_low_thresh,
-        canny_high_thresh,
-        batch_size,
-    )
-    .await?;
-
-    service.start().await?;
-
-    info!("多 Token 模式已启动，按 Ctrl+C 停止...");
-    tokio::signal::ctrl_c().await?;
-
-    // 清理
-    service.stop().await?;
-
-    Ok(())
 }
 
 /// 运行获取画板状态模式
@@ -539,17 +325,28 @@ async fn run_worker_mode(
 
     service.start().await?;
 
+    let stop_signal = service.stop_signal();
+    let pixel_queue = service.pixel_queue();
+
     // 运行比对和绘制循环
-    multi_token::MultiTokenService::run_comparison_loop(
-        service.pixel_queue(),
-        local_board,
-        processed_image,
-        x,
-        y,
-        tokio::time::Duration::from_millis(comparison_interval),
-        service.stop_signal(),
-    )
-    .await;
+    info!("绘制 Worker 已就绪, 按 Ctrl+C 停止...");
+
+    tokio::select! {
+        _ = multi_token::MultiTokenService::run_comparison_loop(
+            pixel_queue,
+            local_board,
+            processed_image,
+            x,
+            y,
+            tokio::time::Duration::from_millis(comparison_interval),
+            stop_signal,
+        ) => {},
+        _ = tokio::signal::ctrl_c() => {
+            info!("接收到停止信号, 正在关闭...");
+        }
+    }
+
+    service.stop().await?;
 
     Ok(())
 }
