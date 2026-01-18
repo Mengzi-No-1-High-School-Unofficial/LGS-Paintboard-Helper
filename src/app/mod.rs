@@ -318,13 +318,16 @@ async fn run_worker_mode(
         canny_high_thresh,
     )?;
 
-    // 创建并启动绘制服务（先使用临时 board）
+    // 创建全局唯一的画板实例
+    let local_board = Arc::new(LocalBoard::new(1000, 600));
+
+    // 创建并启动绘制服务（使用共享 board）
     let mut service = multi_token::MultiTokenService::with_board(
         token_config,
         processed_image.clone(),
         x,
         y,
-        Arc::new(LocalBoard::new(1000, 600)), // 临时 board
+        local_board.clone(),
         Duration::from_millis(comparison_interval),
         batch_size,
         client,
@@ -339,17 +342,19 @@ async fn run_worker_mode(
     let token_manager = service.token_manager();
 
     // 创建监控上下文并连接到 Master
-    let local_board = if let Some(collector) = service.metrics_collector() {
+    if let Some(collector) = service.metrics_collector() {
         let metrics_ctx = ipc::WorkerMetricsContext {
             metrics_collector: collector,
             token_manager: token_manager.clone(),
             pixel_queue: pixel_queue.clone(),
         };
         // 启用监控并连接
-        worker.connect_with_metrics(metrics_ctx).await?
+        worker
+            .connect_with_metrics_and_board(metrics_ctx, local_board.clone())
+            .await?;
     } else {
         // 不启用监控
-        worker.connect().await?
+        worker.connect_with_board(local_board.clone()).await?;
     };
 
     // 设置感兴趣区域（优化同步性能）

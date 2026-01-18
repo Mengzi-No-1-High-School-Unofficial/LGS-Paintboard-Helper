@@ -87,7 +87,16 @@ impl SyncWorker {
 
     /// 连接到 Master 并返回共享的 LocalBoard (带重试)
     pub async fn connect(&self) -> Result<Arc<LocalBoard>> {
-        self.connect_with_retry(5, None).await
+        let local_board = Arc::new(LocalBoard::new(1000, 600));
+        self.connect_with_retry(5, None, local_board).await
+    }
+
+    /// 使用外部注入的 LocalBoard 连接到 Master (带重试)
+    pub async fn connect_with_board(
+        &self,
+        local_board: Arc<LocalBoard>,
+    ) -> Result<Arc<LocalBoard>> {
+        self.connect_with_retry(5, None, local_board).await
     }
 
     /// 连接到 Master 并启用监控（带重试）
@@ -95,7 +104,19 @@ impl SyncWorker {
         &self,
         metrics_ctx: WorkerMetricsContext,
     ) -> Result<Arc<LocalBoard>> {
-        self.connect_with_retry(5, Some(metrics_ctx)).await
+        let local_board = Arc::new(LocalBoard::new(1000, 600));
+        self.connect_with_retry(5, Some(metrics_ctx), local_board)
+            .await
+    }
+
+    /// 使用外部注入的 LocalBoard 连接到 Master 并启用监控（带重试）
+    pub async fn connect_with_metrics_and_board(
+        &self,
+        metrics_ctx: WorkerMetricsContext,
+        local_board: Arc<LocalBoard>,
+    ) -> Result<Arc<LocalBoard>> {
+        self.connect_with_retry(5, Some(metrics_ctx), local_board)
+            .await
     }
 
     /// 带重试的连接方法
@@ -104,15 +125,20 @@ impl SyncWorker {
     ///
     /// * `max_retries` - 最大重试次数
     /// * `metrics_ctx` - 可选的监控上下文
+    /// * `local_board` - 外部注入的 LocalBoard
     pub async fn connect_with_retry(
         &self,
         max_retries: u32,
         metrics_ctx: Option<WorkerMetricsContext>,
+        local_board: Arc<LocalBoard>,
     ) -> Result<Arc<LocalBoard>> {
         let mut retry_count = 0;
 
         loop {
-            match self.try_connect(metrics_ctx.clone()).await {
+            match self
+                .try_connect(metrics_ctx.clone(), local_board.clone())
+                .await
+            {
                 Ok(board) => {
                     if retry_count > 0 {
                         info!(
@@ -153,13 +179,14 @@ impl SyncWorker {
     async fn try_connect(
         &self,
         metrics_ctx: Option<WorkerMetricsContext>,
+        local_board: Arc<LocalBoard>,
     ) -> Result<Arc<LocalBoard>> {
         info!("Connecting to Master at {:?}...", self.socket_path);
 
         let stream = UnixStream::connect(&self.socket_path).await?;
         let (reader, writer) = tokio::io::split(stream);
 
-        let local_board = Arc::new(LocalBoard::new(1000, 600));
+        // 使用传入的 local_board
 
         // 启动连接管理任务(负责接收数据和断线重连)
         let board = local_board.clone();
@@ -330,16 +357,30 @@ impl SyncWorker {
 
                             match msg {
                                 MasterMessage::PixelUpdate { x, y, r, g, b } => {
-                                    local_board.update_pixel(x, y, Rgb::new(r, g, b));
+                                    if let Ok(pos) = winter_paintboard_sdk::models::Pos::new(x, y) {
+                                        winter_paintboard_sdk::event::post(
+                                            winter_paintboard_sdk::event::PaintEvent::PixelUpdate {
+                                                pos,
+                                                color: Rgb::new(r, g, b),
+                                            },
+                                        );
+                                    }
                                 }
                                 MasterMessage::BatchUpdate { updates } => {
                                     let count = updates.len();
                                     for update in updates {
-                                        local_board.update_pixel(
-                                            update.x,
-                                            update.y,
-                                            Rgb::new(update.r, update.g, update.b),
-                                        );
+                                        if let Ok(pos) =
+                                            winter_paintboard_sdk::models::Pos::new(update.x, update.y)
+                                        {
+                                            winter_paintboard_sdk::event::post(
+                                                winter_paintboard_sdk::event::PaintEvent::PixelUpdate {
+                                                    pos,
+                                                    color: Rgb::new(
+                                                        update.r, update.g, update.b,
+                                                    ),
+                                                },
+                                            );
+                                        }
                                     }
                                     debug!("Worker received batch update with {} pixels", count);
                                 }
