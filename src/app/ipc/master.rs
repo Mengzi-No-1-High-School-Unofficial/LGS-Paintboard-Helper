@@ -322,20 +322,6 @@ impl SyncMasterInner {
                         };
                         self.broadcast_message(&msg).await;
                     }
-                    PaintEvent::Success { pos, color, uid } => {
-                        debug!(
-                            "Master: 收到成功像素更新 ({}, {}) -> {:?}",
-                            pos.x, pos.y, color
-                        );
-                        let msg = MasterMessage::PixelUpdate {
-                            x: pos.x,
-                            y: pos.y,
-                            r: color.r,
-                            g: color.g,
-                            b: color.b,
-                        };
-                        self.broadcast_message(&msg).await;
-                    }
                     _ => {}
                 },
                 Err(e) => {

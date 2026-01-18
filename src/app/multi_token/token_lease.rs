@@ -46,7 +46,6 @@ impl TokenLease {
     /// * `uid` - 用户ID
     /// * `token` - Token字符串
     /// * `manager` - Token管理器引用
-    /// * `cd_duration` - 冷却时间持续时间
     ///
     /// # 返回值
     ///
@@ -89,7 +88,7 @@ impl TokenLease {
     /// 标记绘制失败，释放 Token
     ///
     /// 将Token状态设置为可用，使其可以被重新获取
-    pub fn mark_failed(&mut self) {
+    pub fn mark_no_operation(&mut self) {
         self.success = false;
     }
 }

@@ -7,13 +7,17 @@ use crate::models::{Pos, Rgb};
 use once_cell::sync::Lazy;
 use tokio::sync::broadcast::{self, Receiver, Sender};
 
+use std::sync::Arc;
+
 /// 包含事件具体信息的枚举。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum PaintEvent {
     /// 绘制成功事件。
     Success { uid: u32, pos: Pos, color: Rgb },
     /// 像素更新事件（来自 WebSocket 0xFA 消息）。
     PixelUpdate { pos: Pos, color: Rgb },
+    /// 批量像素更新事件。
+    BatchUpdate(Arc<Vec<(Pos, Rgb)>>),
     /// 绘制失败事件。
     Failure { uid: u32, pos: Pos },
 }
@@ -26,9 +30,9 @@ pub struct EventBus {
 
 /// 全局唯一的事件总线实例。
 static EVENT_BUS: Lazy<EventBus> = Lazy::new(|| {
-    // 优化：将容量从1024增加到4e6，支持高速绘制（800+ events/s）
-    // 避免RecvError::Lagged导致本地状态不准确和重复绘制
-    let (sender, _) = broadcast::channel(4e6 as usize);
+    // 优化：容量设置为 1,000,000，足以应对极高频爆发。
+    // 由于支持 BatchUpdate，即便瞬间同步 60万个点也只需要 1 个消息位。
+    let (sender, _) = broadcast::channel(1_000_000);
     EventBus { sender }
 });
 

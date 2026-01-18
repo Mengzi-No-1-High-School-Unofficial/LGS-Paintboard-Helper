@@ -56,6 +56,8 @@ pub struct MultiTokenService {
     metrics_collector: Option<Arc<MetricsCollector>>,
     /// 当前差异像素数（用于监控）
     current_diff_count: Arc<std::sync::atomic::AtomicUsize>,
+    /// 正在绘制中的像素（已发送但未收到响应），记录发送时间
+    pending_pixels: Arc<dashmap::DashMap<winter_paintboard_sdk::models::Pos, std::time::Instant>>,
 }
 
 impl MultiTokenService {
@@ -104,6 +106,7 @@ impl MultiTokenService {
             batch_size,
             metrics_collector: None,
             current_diff_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            pending_pixels: Arc::new(dashmap::DashMap::new()),
         })
     }
 
@@ -165,8 +168,9 @@ impl MultiTokenService {
             batch_receiver,
             self.shared_client.clone(),
             self.batch_size,                // 批处理大小限制
-            Duration::from_millis(200),     // 时间限制
+            Duration::from_millis(100),     // 时间限制
             self.metrics_collector.clone(), // 监控数据采集器
+            self.pending_pixels.clone(),    // pending pixels 追踪
         );
 
         self.batcher_handle = Some(tokio::spawn(async move {
@@ -198,6 +202,7 @@ impl MultiTokenService {
         let start_y = self.start_y;
         let interval_duration = self.comparison_interval;
         let stop_signal = self.stop_signal.clone();
+        let pending_pixels = self.pending_pixels.clone();
 
         let comparison_handle = tokio::spawn(async move {
             Self::run_comparison_loop(
@@ -208,6 +213,7 @@ impl MultiTokenService {
                 start_y,
                 interval_duration,
                 stop_signal,
+                pending_pixels,
             )
             .await;
         });
@@ -217,6 +223,26 @@ impl MultiTokenService {
         // 启动 LocalBoard 的事件监听器和热力图清理任务
         self.local_board.start_event_listener();
         self.local_board.start_heatmap_cleanup_task();
+
+        // 启动 pending pixels 清理任务
+        let pending_pixels = self.pending_pixels.clone();
+        tokio::spawn(async move {
+            let mut receiver = winter_paintboard_sdk::event::subscribe();
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => match event {
+                        winter_paintboard_sdk::event::PaintEvent::Success { pos, .. } => {
+                            pending_pixels.remove(&pos);
+                        }
+                        winter_paintboard_sdk::event::PaintEvent::Failure { pos, .. } => {
+                            pending_pixels.remove(&pos);
+                        }
+                        _ => {}
+                    },
+                    Err(_) => break,
+                }
+            }
+        });
 
         info!("多 Token 服务已启动，Worker 数量: {}", self.workers.len());
         Ok(())
@@ -267,6 +293,7 @@ impl MultiTokenService {
     /// * `start_y` - 起始Y坐标
     /// * `interval_duration` - 比对间隔时间
     /// * `stop_signal` - 停止信号
+    /// * `pending_pixels` - 正在绘制中的像素追踪
     #[allow(clippy::too_many_arguments)]
     pub async fn run_comparison_loop(
         pixel_queue: Arc<PixelQueue>,
@@ -276,6 +303,9 @@ impl MultiTokenService {
         start_y: i32,
         interval_duration: Duration,
         stop_signal: Arc<AtomicBool>,
+        pending_pixels: Arc<
+            dashmap::DashMap<winter_paintboard_sdk::models::Pos, std::time::Instant>,
+        >,
     ) {
         let mut interval_timer = interval(interval_duration);
 
@@ -292,6 +322,11 @@ impl MultiTokenService {
                 continue;
             }
 
+            // 清理超时的 pending 像素（超过 1 秒认为响应丢失或失败）
+            let timeout = Duration::from_millis(1000);
+            let now = std::time::Instant::now();
+            pending_pixels.retain(|_, sent_time| now.duration_since(*sent_time) < timeout);
+
             // 获取惩罚敏感度系数
             let sensitivity = get_penalty_sensitivity() as f64;
 
@@ -299,6 +334,11 @@ impl MultiTokenService {
             let mut differences = Vec::new();
 
             for (pos, target_color) in &target_image.full_scale_operations {
+                // 跳过正在绘制中的像素（已发送但未收到响应）
+                if pending_pixels.contains_key(pos) {
+                    continue;
+                }
+
                 let x = pos.x as i32;
                 let y = pos.y as i32;
 

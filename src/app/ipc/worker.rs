@@ -368,21 +368,26 @@ impl SyncWorker {
                                 }
                                 MasterMessage::BatchUpdate { updates } => {
                                     let count = updates.len();
+                                    let mut batch = Vec::with_capacity(count);
+
                                     for update in updates {
                                         if let Ok(pos) =
                                             winter_paintboard_sdk::models::Pos::new(update.x, update.y)
                                         {
-                                            winter_paintboard_sdk::event::post(
-                                                winter_paintboard_sdk::event::PaintEvent::PixelUpdate {
-                                                    pos,
-                                                    color: Rgb::new(
-                                                        update.r, update.g, update.b,
-                                                    ),
-                                                },
-                                            );
+                                            batch.push((
+                                                pos,
+                                                Rgb::new(update.r, update.g, update.b),
+                                            ));
                                         }
                                     }
-                                    debug!("Worker received batch update with {} pixels", count);
+
+                                    if !batch.is_empty() {
+                                        // 优化：直连路径 (Fast Path)
+                                        // 批量更新直接写入 LocalBoard，跳过事件总线 (Channel)。
+                                        // 这样可以避免在同步 60 万个点时对异步运行时造成瞬间压力，并规避处理延迟。
+                                        local_board.update_batch(batch);
+                                    }
+                                    debug!("Worker processed batch update (Fast Path) with {} pixels", count);
                                 }
                                 MasterMessage::Heartbeat { timestamp } => {
                                     let ack = WorkerMessage::HeartbeatAck { timestamp };

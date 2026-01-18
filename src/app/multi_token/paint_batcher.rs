@@ -28,6 +28,8 @@ pub struct PaintBatcher {
     time_limit: Duration,
     /// 监控数据采集器（可选）
     metrics_collector: Option<Arc<MetricsCollector>>,
+    /// 正在绘制中的像素追踪
+    pending_pixels: Arc<dashmap::DashMap<winter_paintboard_sdk::models::Pos, std::time::Instant>>,
 }
 
 impl PaintBatcher {
@@ -39,12 +41,16 @@ impl PaintBatcher {
     /// - `batch_size_limit`: 当批次中的操作数达到此值时，将触发发送。
     /// - `time_limit`: 自上次发送以来，若超过此时间，将触发发送。
     /// - `metrics_collector`: 可选的监控数据采集器
+    /// - `pending_pixels`: 正在绘制中的像素追踪
     pub fn new(
         receiver: mpsc::UnboundedReceiver<PaintOperation>,
         client: Arc<AsyncClient>,
         batch_size_limit: usize,
         time_limit: Duration,
         metrics_collector: Option<Arc<MetricsCollector>>,
+        pending_pixels: Arc<
+            dashmap::DashMap<winter_paintboard_sdk::models::Pos, std::time::Instant>,
+        >,
     ) -> Self {
         Self {
             receiver,
@@ -53,6 +59,7 @@ impl PaintBatcher {
             batch_size_limit,
             time_limit,
             metrics_collector,
+            pending_pixels,
         }
     }
 
@@ -111,6 +118,13 @@ impl PaintBatcher {
         let batch_to_send = std::mem::take(&mut self.batch);
         let client = self.client.clone();
         let metrics_collector = self.metrics_collector.clone();
+        let pending_pixels = self.pending_pixels.clone();
+
+        // 标记所有将要发送的像素为 pending
+        let now = std::time::Instant::now();
+        for op in &batch_to_send {
+            pending_pixels.insert(op.pos, now);
+        }
 
         // 生成一个新任务来发送批处理
         tokio::spawn(async move {

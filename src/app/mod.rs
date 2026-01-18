@@ -337,16 +337,12 @@ async fn run_worker_mode(
 
     service.start().await?;
 
-    let stop_signal = service.stop_signal();
-    let pixel_queue = service.pixel_queue();
-    let token_manager = service.token_manager();
-
     // 创建监控上下文并连接到 Master
     if let Some(collector) = service.metrics_collector() {
         let metrics_ctx = ipc::WorkerMetricsContext {
             metrics_collector: collector,
-            token_manager: token_manager.clone(),
-            pixel_queue: pixel_queue.clone(),
+            token_manager: service.token_manager().clone(),
+            pixel_queue: service.pixel_queue().clone(),
         };
         // 启用监控并连接
         worker
@@ -365,23 +361,10 @@ async fn run_worker_mode(
         .collect();
     local_board.set_interest_pixels(interest_pixels).await;
 
-    // 运行比对和绘制循环
+    // 等待停止信号
     info!("绘制 Worker 已就绪, 按 Ctrl+C 停止...");
-
-    tokio::select! {
-        _ = multi_token::MultiTokenService::run_comparison_loop(
-            pixel_queue,
-            local_board,
-            processed_image,
-            x,
-            y,
-            tokio::time::Duration::from_millis(comparison_interval),
-            stop_signal,
-        ) => {},
-        _ = tokio::signal::ctrl_c() => {
-            info!("接收到停止信号, 正在关闭...");
-        }
-    }
+    let _ = tokio::signal::ctrl_c().await;
+    info!("接收到停止信号, 正在关闭...");
 
     service.stop().await?;
 

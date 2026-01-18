@@ -24,6 +24,15 @@ pub struct PixelStatus {
     pub color: Rgb,
 }
 
+/// 热力图条目，使用指数衰减累加器实现 O(1) 复杂度的热度计算
+#[derive(Debug, Clone, Copy)]
+pub struct HeatEntry {
+    /// 当前累计的热度分数
+    pub score: f64,
+    /// 最后一次更新热度的时间
+    pub last_update: SystemTime,
+}
+
 /// 本地画板数据结构，使用 DashMap 存储
 ///
 /// 管理本地画板的像素数据、热力图、同步状态等信息
@@ -31,8 +40,8 @@ pub struct PixelStatus {
 pub struct LocalBoard {
     /// 使用 DashMap 存储像素位置到状态的映射，支持高并发读写
     pixels: Arc<DashMap<Pos, PixelStatus>>,
-    /// 热力图数据，用于记录像素被绘制的时间戳
-    heatmap: Arc<DashMap<Pos, Vec<SystemTime>>>,
+    /// 热力图数据，用于记录像素被绘制的频率（指数衰减）
+    heatmap: Arc<DashMap<Pos, HeatEntry>>,
     /// 是否已初始化
     is_initialized: AtomicBool,
     /// 画板宽度
@@ -45,15 +54,6 @@ pub struct LocalBoard {
 
 impl LocalBoard {
     /// 创建新的本地画板实例
-    ///
-    /// # 参数
-    ///
-    /// * `width` - 画板宽度
-    /// * `height` - 画板高度
-    ///
-    /// # 返回值
-    ///
-    /// 返回初始化的本地画板实例
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             pixels: Arc::new(DashMap::new()),
@@ -83,6 +83,16 @@ impl LocalBoard {
     pub fn update_pixel(&self, x: u16, y: u16, color: Rgb) {
         if x < self.width && y < self.height {
             let pos = Pos::new(x, y).expect("Invalid coordinates for Pos creation");
+            self.pixels.insert(pos, PixelStatus { color });
+        }
+    }
+
+    /// 批量更新像素颜色 (Fast Path)
+    ///
+    /// 直接写入像素数据，跳过事件总线和热度统计。
+    /// 适用于从 Master 接收的全量或批量同步数据。
+    pub fn update_batch(&self, updates: Vec<(Pos, Rgb)>) {
+        for (pos, color) in updates {
             self.pixels.insert(pos, PixelStatus { color });
         }
     }
@@ -276,36 +286,41 @@ impl LocalBoard {
     /// 计算带时间衰减的热度分数
     ///
     /// 返回值范围 [0, +∞),值越大表示该位置越"热"(被频繁绘制)
-    /// 使用线性时间衰减:越近的绘制权重越高
-    ///
-    /// # 参数
-    ///
-    /// * `pos` - 像素位置
-    ///
-    /// # 返回值
-    ///
-    /// 热度分数,0 表示该位置在时间窗口内没有被绘制过
+    /// 使用指数衰减公式: S_new = S_old * exp(-λ * Δt)
     pub fn calculate_heat_score(&self, pos: &Pos) -> f64 {
-        const DECAY_WINDOW_SECS: f64 = 600.0; // 10分钟衰减窗口
+        const LAMBDA: f64 = 0.007; // 衰减系数，约 10 分钟衰减到忽略不计
 
         self.heatmap.get(pos).map_or(0.0, |entry| {
+            let entry = entry.value();
             let now = SystemTime::now();
-            entry
-                .value()
-                .iter()
-                .filter_map(|&timestamp| {
-                    let elapsed = now.duration_since(timestamp).ok()?;
-                    let elapsed_secs = elapsed.as_secs_f64();
+            let elapsed = now.duration_since(entry.last_update).unwrap_or_default();
+            let elapsed_secs = elapsed.as_secs_f64();
 
-                    if elapsed_secs < DECAY_WINDOW_SECS {
-                        // 线性衰减: 越近的绘制权重越高 (1.0 -> 0.0)
-                        Some(1.0 - (elapsed_secs / DECAY_WINDOW_SECS))
-                    } else {
-                        None
-                    }
-                })
-                .sum()
+            // S_current = S_last * exp(-λ * t)
+            entry.score * (-LAMBDA * elapsed_secs).exp()
         })
+    }
+
+    /// 更新指定位置的热度值
+    ///
+    /// 增加一次绘制记录，并应用之前的指数衰减因子
+    pub fn update_heat_at(&self, pos: Pos, now: SystemTime) {
+        const LAMBDA: f64 = 0.007;
+
+        let mut entry = self.heatmap.entry(pos).or_insert(HeatEntry {
+            score: 0.0,
+            last_update: now,
+        });
+
+        let entry = entry.value_mut();
+        let elapsed = now
+            .duration_since(entry.last_update)
+            .unwrap_or(Duration::from_secs(0));
+        let elapsed_secs = elapsed.as_secs_f64();
+
+        // 应用衰减并加上本次新增的热度 (1.0)
+        entry.score = entry.score * (-LAMBDA * elapsed_secs).exp() + 1.0;
+        entry.last_update = now;
     }
 
     /// 将画板数据序列化为字节数组
@@ -407,12 +422,8 @@ impl LocalBoard {
                                 // 更新像素颜色
                                 self_clone.update_pixel(pos.x, pos.y, color);
 
-                                // 3. 更新热力图，记录绘制时间戳
-                                self_clone
-                                    .heatmap
-                                    .entry(pos)
-                                    .or_default()
-                                    .push(SystemTime::now());
+                                // 更新热力图：记录自己的成功绘制
+                                self_clone.update_heat_at(pos, SystemTime::now());
 
                                 trace!("LocalBoard: 通过事件更新像素 at ({}, {})", pos.x, pos.y);
                             }
@@ -420,18 +431,18 @@ impl LocalBoard {
                                 // 更新像素颜色
                                 self_clone.update_pixel(pos.x, pos.y, color);
 
-                                // 3. 更新热力图，记录绘制时间戳
-                                self_clone
-                                    .heatmap
-                                    .entry(pos)
-                                    .or_default()
-                                    .push(SystemTime::now());
+                                // 更新热力图：记录实时的外部像素变动（战斗）
+                                self_clone.update_heat_at(pos, SystemTime::now());
 
                                 trace!(
                                     "LocalBoard: 通过像素更新事件更新 at ({}, {})",
                                     pos.x,
                                     pos.y
                                 );
+                            }
+                            event::PaintEvent::BatchUpdate(_) => {
+                                // BatchUpdate 现在走“直连路径”（Fast Path），不通过 Channel。
+                                // 这样可以避免在处理 60 万个同步点时阻塞事件监听器的单线程循环。
                             }
                             event::PaintEvent::Failure { uid: _, pos } => {
                                 debug!("LocalBoard: 绘制失败事件 at ({}, {})", pos.x, pos.y);
@@ -461,26 +472,12 @@ impl LocalBoard {
                 interval.tick().await;
                 trace!("LocalBoard: 开始清理过期热力图数据");
                 let now = SystemTime::now();
-                let mut empty_keys = Vec::new();
-
-                self_clone.heatmap.iter_mut().for_each(|mut entry| {
-                    // 移除所有超过10分钟的时间戳
-                    entry.value_mut().retain(|&timestamp| {
-                        now.duration_since(timestamp).unwrap_or_default() < HEATMAP_EXPIRE_DURATION
-                    });
-                    // 如果清理后列表为空，则记录该键以便后续删除
-                    if entry.value().is_empty() {
-                        empty_keys.push(*entry.key());
-                    }
+                self_clone.heatmap.retain(|_, entry| {
+                    let elapsed = now.duration_since(entry.last_update).unwrap_or_default();
+                    // 如果 20 分钟没更新过，且热度已经退去，则彻底移除
+                    elapsed < HEATMAP_EXPIRE_DURATION * 2 || entry.score > 0.1
                 });
 
-                // 从DashMap中移除所有空的条目
-                if !empty_keys.is_empty() {
-                    trace!("LocalBoard: 移除 {} 个空的热力图条目", empty_keys.len());
-                    for key in empty_keys {
-                        self_clone.heatmap.remove(&key);
-                    }
-                }
                 trace!("LocalBoard: 热力图数据清理完成");
             }
         });

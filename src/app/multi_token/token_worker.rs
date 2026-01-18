@@ -99,7 +99,7 @@ impl TokenWorker {
                 Some(p) => p,
                 None => {
                     // 没有任务，立即释放 Token，避免占用
-                    token_lease.mark_failed();
+                    token_lease.mark_no_operation();
 
                     // 等待新像素或超时（事件驱动）
                     tokio::select! {
@@ -127,7 +127,7 @@ impl TokenWorker {
             if let Err(e) = self.batch_sender.send(operation) {
                 error!("Worker {}: 发送操作到 Batcher 失败: {}", self.worker_id, e);
                 // 发送失败，意味着 Batcher 已关闭，将 Token 标记为失败以立即释放
-                token_lease.mark_failed();
+                token_lease.mark_no_operation();
             } else {
                 // 发送成功后，立即将 Token 标记为成功使用，以启动其 CD 计时
                 token_lease.mark_success();
