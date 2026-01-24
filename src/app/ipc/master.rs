@@ -78,38 +78,40 @@ impl SyncMaster {
 
         // 准备广播回调
         let master_for_sync = self.clone_inner();
-        let on_diff = Arc::new(
-            move |changes: Vec<(u32, u32, winter_paintboard_sdk::Rgb)>| {
-                if changes.is_empty() {
-                    return;
+        let local_board = self.local_board.clone();
+        let on_diff = Arc::new(move |_: Vec<(u32, u32, winter_paintboard_sdk::Rgb)>| {
+            let master = master_for_sync.clone();
+            let all_pixels = local_board.get_all_pixels();
+
+            tokio::spawn(async move {
+                let all_pixels_len = all_pixels.len();
+                if all_pixels_len > 5000 {
+                    // tracing::warn!("Large diffa detected ({}), broadcasting...", all_pixels_len);
+                    tracing::info!(
+                        "Broadcasting the fullboard, totally {} pixels",
+                        all_pixels_len
+                    );
                 }
 
-                let master = master_for_sync.clone();
+                let all_pixels: Vec<crate::app::ipc::protocol::PixelUpdateData> = all_pixels
+                    .into_iter()
+                    .map(|(x, y, rgb)| crate::app::ipc::protocol::PixelUpdateData {
+                        x: x as u16,
+                        y: y as u16,
+                        r: rgb.r,
+                        g: rgb.g,
+                        b: rgb.b,
+                    })
+                    .collect();
 
-                tokio::spawn(async move {
-                    let updates_len = changes.len();
-                    if updates_len > 5000 {
-                        tracing::warn!("Large diff detected ({}), broadcasting...", updates_len);
-                    }
+                let msg = crate::app::ipc::protocol::MasterMessage::BatchUpdate {
+                    updates: all_pixels,
+                };
 
-                    let updates: Vec<crate::app::ipc::protocol::PixelUpdateData> = changes
-                        .into_iter()
-                        .map(|(x, y, rgb)| crate::app::ipc::protocol::PixelUpdateData {
-                            x: x as u16,
-                            y: y as u16,
-                            r: rgb.r,
-                            g: rgb.g,
-                            b: rgb.b,
-                        })
-                        .collect();
-
-                    let msg = crate::app::ipc::protocol::MasterMessage::BatchUpdate { updates };
-
-                    // 复用 broadcast_message
-                    master.broadcast_message(&msg).await;
-                });
-            },
-        );
+                // 复用 broadcast_message
+                master.broadcast_message(&msg).await;
+            });
+        });
 
         tokio::spawn(async move {
             loop {

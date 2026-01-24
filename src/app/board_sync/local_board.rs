@@ -482,6 +482,15 @@ impl LocalBoard {
             }
         });
     }
+
+    pub fn get_all_pixels(&self) -> Vec<(u16, u16, Rgb)> {
+        let pixels = self
+            .pixels
+            .iter()
+            .map(|entry| (entry.key().x, entry.key().y, entry.value().color))
+            .collect();
+        pixels
+    }
 }
 
 #[cfg(test)]
